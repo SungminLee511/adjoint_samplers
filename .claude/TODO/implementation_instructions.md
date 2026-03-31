@@ -980,3 +980,954 @@ python eval_enhanced.py experiment=lj55_asbs checkpoint=checkpoints/checkpoint_l
 1. **Graph particle systems:** DW4, LJ13, LJ55 use center-of-mass-free coordinates. The `Graph` mixin in `sde.py` handles this via `propagate` and `randn_like`. Make sure antithetic sampling respects this — use `sde.randn_like` (which projects to COM-free subspace) rather than `torch.randn_like`.
 1. **Energy interface:** `energy.eval(x)` returns scalar energies (N,). `energy.grad_E(x)` returns (N, D). `energy.score(x)` returns (N, D) = `-grad_E(x)`. The `__call__` method returns `{"forces": grad_E(x)}`.
 1. **No modification of originals:** All enhancements import from `adjoint_samplers` but never modify it. The baseline must always be reproducible.
+
+-----
+
+## Task 10: Evaluation and Visualization (`enhancements/evaluation.py` and `run_evaluation.py`)
+
+This is the final task. After all enhancements are built and tested individually, this module runs a systematic evaluation across multiple seeds and sample sizes, generates publication-quality plots, and produces a summary report.
+
+### 10.1 The Statistical Evaluation Script (`enhancements/evaluation.py`)
+
+This module runs repeated evaluations to collect statistics (mean ± std across seeds), not just single-run point estimates.
+
+```python
+"""
+enhancements/evaluation.py
+
+Systematic evaluation: multiple seeds, multiple sample sizes,
+all enhancements compared against baseline, with statistics.
+"""
+
+import torch
+import numpy as np
+from typing import Optional, List
+from dataclasses import dataclass, field
+from pathlib import Path
+import json
+
+from adjoint_samplers.components.sde import ControlledSDE, sdeint
+from adjoint_samplers.energies.base_energy import BaseEnergy
+
+from enhancements.stein_kernel import compute_ksd, median_bandwidth
+from enhancements.stein_cv import stein_cv_estimate, multi_function_stein_cv
+from enhancements.antithetic import sdeint_antithetic, antithetic_estimate
+from enhancements.mcmc_correction import mh_correct
+from enhancements.generator_stein import generator_stein_cv_estimate
+
+
+@dataclass
+class EvalConfig:
+    """Configuration for the systematic evaluation."""
+    n_seeds: int = 10                          # Number of independent runs
+    sample_sizes: List[int] = field(           # Sample sizes to test scaling
+        default_factory=lambda: [100, 500, 1000, 2000]
+    )
+    mh_steps_list: List[int] = field(          # MH steps to ablate
+        default_factory=lambda: [0, 5, 10, 20]
+    )
+    stein_reg_lambdas: List[float] = field(    # Stein regularization to ablate
+        default_factory=lambda: [1e-6, 1e-4, 1e-2]
+    )
+    max_stein_samples: int = 2000              # Memory cap for Stein kernel
+    eval_batch_size: int = 2000                # Batch size for generation
+
+
+def generate_samples(
+    sde: ControlledSDE,
+    source,
+    timesteps: torch.Tensor,
+    n_samples: int,
+    batch_size: int,
+    device: str,
+) -> torch.Tensor:
+    """Generate n_samples terminal samples from the SDE."""
+    x1_list = []
+    n_gen = 0
+    while n_gen < n_samples:
+        b = min(batch_size, n_samples - n_gen)
+        x0 = source.sample([b]).to(device)
+        _, x1 = sdeint(sde, x0, timesteps, only_boundary=True)
+        x1_list.append(x1)
+        n_gen += b
+    return torch.cat(x1_list, dim=0)[:n_samples]
+
+
+def single_run_evaluation(
+    sde: ControlledSDE,
+    source,
+    energy: BaseEnergy,
+    timesteps: torch.Tensor,
+    n_samples: int,
+    mh_steps: int,
+    stein_reg_lambda: float,
+    device: str,
+    gt_mean_energy: Optional[float] = None,
+) -> dict:
+    """Run one complete evaluation: generate samples, apply all enhancements.
+
+    Returns a dict of scalar metrics.
+    """
+    results = {}
+
+    # --- Generate samples ---
+    samples = generate_samples(
+        sde, source, timesteps, n_samples,
+        batch_size=min(n_samples, 2000), device=device,
+    )
+    N, D = samples.shape
+
+    # --- Energies and scores ---
+    with torch.no_grad():
+        energies = energy.eval(samples)
+    scores = energy.score(samples)
+
+    # --- 1. Naive estimate ---
+    results['naive_mean_energy'] = energies.mean().item()
+    results['naive_var'] = (energies.var() / N).item()
+
+    # --- 2. KSD ---
+    N_ksd = min(N, 2000)
+    idx = torch.randperm(N)[:N_ksd]
+    ksd_sq = compute_ksd(samples[idx], scores[idx])
+    results['ksd_squared'] = ksd_sq.item()
+
+    # --- 3. Stein CV ---
+    N_s = min(N, 2000)
+    idx_s = torch.randperm(N)[:N_s]
+    scv = stein_cv_estimate(
+        samples[idx_s], scores[idx_s], energies[idx_s],
+        reg_lambda=stein_reg_lambda,
+    )
+    results['stein_cv_estimate'] = scv['estimate']
+    results['stein_cv_var'] = scv['variance_stein']
+    results['stein_var_reduction'] = (
+        scv['variance_stein'] / (scv['variance_naive'] + 1e-20)
+    )
+
+    # --- 4. Antithetic ---
+    N_anti = min(N, 1000)
+    x0_anti = source.sample([N_anti]).to(device)
+    _, x1_orig, x1_anti = sdeint_antithetic(
+        sde, x0_anti, timesteps, only_boundary=True
+    )
+    E_orig = energy.eval(x1_orig)
+    E_anti = energy.eval(x1_anti)
+    anti = antithetic_estimate(E_orig, E_anti)
+    results['anti_estimate'] = anti['estimate']
+    results['anti_var'] = anti['variance_anti']
+    results['anti_correlation'] = anti['correlation']
+    results['anti_var_reduction'] = anti['variance_reduction_factor']
+
+    # --- 5. MCMC correction ---
+    if mh_steps > 0:
+        mh = mh_correct(samples, energy, n_steps=mh_steps)
+        corrected = mh['corrected_samples']
+        corrected_energies = energy.eval(corrected)
+        results['mcmc_mean_energy'] = corrected_energies.mean().item()
+        results['mcmc_var'] = (corrected_energies.var() / N).item()
+        results['mcmc_acceptance'] = mh['acceptance_rate']
+
+        # --- 6. MCMC + Stein CV (hybrid) ---
+        corrected_scores = energy.score(corrected)
+        N_h = min(N, 2000)
+        idx_h = torch.randperm(N)[:N_h]
+        hybrid = stein_cv_estimate(
+            corrected[idx_h], corrected_scores[idx_h],
+            corrected_energies[idx_h],
+            reg_lambda=stein_reg_lambda,
+        )
+        results['hybrid_estimate'] = hybrid['estimate']
+        results['hybrid_var'] = hybrid['variance_stein']
+    else:
+        results['mcmc_mean_energy'] = results['naive_mean_energy']
+        results['mcmc_var'] = results['naive_var']
+        results['mcmc_acceptance'] = 0.0
+        results['hybrid_estimate'] = results['stein_cv_estimate']
+        results['hybrid_var'] = results['stein_cv_var']
+
+    # --- 7. Generator Stein CV ---
+    N_g = min(N, 1000)
+    idx_g = torch.randperm(N)[:N_g]
+    gen = generator_stein_cv_estimate(
+        samples[idx_g], sde, energies[idx_g],
+        reg_lambda=stein_reg_lambda,
+    )
+    results['gen_stein_estimate'] = gen['estimate']
+    results['gen_stein_var'] = gen['variance_gen_stein']
+
+    # --- 8. Errors vs ground truth ---
+    if gt_mean_energy is not None:
+        gt = gt_mean_energy
+        results['error_naive'] = abs(results['naive_mean_energy'] - gt)
+        results['error_stein'] = abs(results['stein_cv_estimate'] - gt)
+        results['error_anti'] = abs(results['anti_estimate'] - gt)
+        results['error_mcmc'] = abs(results['mcmc_mean_energy'] - gt)
+        results['error_hybrid'] = abs(results['hybrid_estimate'] - gt)
+        results['error_gen_stein'] = abs(results['gen_stein_estimate'] - gt)
+
+    return results
+
+
+def full_evaluation(
+    sde: ControlledSDE,
+    source,
+    energy: BaseEnergy,
+    timesteps: torch.Tensor,
+    device: str,
+    gt_mean_energy: Optional[float] = None,
+    config: Optional[EvalConfig] = None,
+) -> dict:
+    """Run the full systematic evaluation across seeds and sample sizes.
+
+    Returns a nested dict:
+        results[n_samples][metric_name] = {
+            'mean': float, 'std': float, 'values': list[float]
+        }
+    """
+    if config is None:
+        config = EvalConfig()
+
+    all_results = {}
+
+    for n_samples in config.sample_sizes:
+        print(f"\n--- N = {n_samples} ---")
+        seed_results = []
+
+        for seed in range(config.n_seeds):
+            torch.manual_seed(seed * 12345 + n_samples)
+            np.random.seed(seed * 12345 + n_samples)
+
+            run = single_run_evaluation(
+                sde=sde,
+                source=source,
+                energy=energy,
+                timesteps=timesteps,
+                n_samples=n_samples,
+                mh_steps=10,
+                stein_reg_lambda=1e-4,
+                device=device,
+                gt_mean_energy=gt_mean_energy,
+            )
+            seed_results.append(run)
+            print(f"  seed {seed}: naive={run['naive_mean_energy']:.4f}, "
+                  f"stein={run['stein_cv_estimate']:.4f}, "
+                  f"hybrid={run['hybrid_estimate']:.4f}")
+
+        # Aggregate across seeds
+        all_keys = seed_results[0].keys()
+        aggregated = {}
+        for key in all_keys:
+            values = [r[key] for r in seed_results]
+            aggregated[key] = {
+                'mean': float(np.mean(values)),
+                'std': float(np.std(values)),
+                'values': values,
+            }
+
+        all_results[n_samples] = aggregated
+
+    return all_results
+
+
+def save_results(results: dict, path: str):
+    """Save results to JSON (convert numpy/torch types)."""
+    def convert(obj):
+        if isinstance(obj, (np.floating, np.integer)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, torch.Tensor):
+            return obj.cpu().tolist()
+        return obj
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(results, f, indent=2, default=convert)
+    print(f"Results saved to {path}")
+```
+
+### 10.2 The Visualization Module (`enhancements/visualization.py`)
+
+```python
+"""
+enhancements/visualization.py
+
+Generate publication-quality plots comparing all enhancement methods.
+"""
+
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend
+import matplotlib.pyplot as plt
+from matplotlib.ticker import ScalarFormatter
+from pathlib import Path
+from typing import Optional
+
+
+# Style
+plt.rcParams.update({
+    'font.size': 12,
+    'axes.labelsize': 14,
+    'axes.titlesize': 14,
+    'legend.fontsize': 10,
+    'xtick.labelsize': 11,
+    'ytick.labelsize': 11,
+    'figure.dpi': 150,
+    'savefig.dpi': 300,
+    'savefig.bbox': 'tight',
+})
+
+COLORS = {
+    'naive': '#1f77b4',
+    'stein_cv': '#ff7f0e',
+    'antithetic': '#2ca02c',
+    'mcmc': '#d62728',
+    'hybrid': '#9467bd',
+    'gen_stein': '#8c564b',
+}
+
+LABELS = {
+    'naive': 'Vanilla ASBS',
+    'stein_cv': 'Stein CV',
+    'antithetic': 'Antithetic',
+    'mcmc': 'MCMC Corrected',
+    'hybrid': 'MCMC + Stein CV',
+    'gen_stein': 'Generator Stein CV',
+}
+
+
+def plot_estimation_error_vs_samples(
+    results: dict,
+    save_path: str,
+    gt_mean_energy: Optional[float] = None,
+    title: str = "Mean Energy Estimation Error vs Sample Size",
+):
+    """Plot |estimated - ground truth| for each method vs N.
+
+    Args:
+        results: output of full_evaluation(), keyed by n_samples
+        save_path: path to save the figure
+        gt_mean_energy: ground truth (if not in results)
+        title: plot title
+    """
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    sample_sizes = sorted(results.keys())
+
+    methods = [
+        ('error_naive', 'naive'),
+        ('error_stein', 'stein_cv'),
+        ('error_anti', 'antithetic'),
+        ('error_mcmc', 'mcmc'),
+        ('error_hybrid', 'hybrid'),
+        ('error_gen_stein', 'gen_stein'),
+    ]
+
+    for metric_key, method_key in methods:
+        if metric_key not in results[sample_sizes[0]]:
+            continue
+
+        means = [results[n][metric_key]['mean'] for n in sample_sizes]
+        stds = [results[n][metric_key]['std'] for n in sample_sizes]
+
+        ax.errorbar(
+            sample_sizes, means, yerr=stds,
+            label=LABELS[method_key],
+            color=COLORS[method_key],
+            marker='o', markersize=5,
+            linewidth=2, capsize=3,
+        )
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Number of Samples (N)')
+    ax.set_ylabel('|Estimated - Ground Truth|')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def plot_variance_comparison(
+    results: dict,
+    save_path: str,
+    title: str = "Estimator Variance vs Sample Size",
+):
+    """Plot variance of each estimator vs N.
+
+    Shows how Stein CV and antithetic reduce variance compared to naive.
+    """
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    sample_sizes = sorted(results.keys())
+
+    variance_methods = [
+        ('naive_var', 'naive'),
+        ('stein_cv_var', 'stein_cv'),
+        ('anti_var', 'antithetic'),
+        ('mcmc_var', 'mcmc'),
+        ('hybrid_var', 'hybrid'),
+        ('gen_stein_var', 'gen_stein'),
+    ]
+
+    for var_key, method_key in variance_methods:
+        if var_key not in results[sample_sizes[0]]:
+            continue
+
+        means = [results[n][var_key]['mean'] for n in sample_sizes]
+        stds = [results[n][var_key]['std'] for n in sample_sizes]
+
+        ax.errorbar(
+            sample_sizes, means, yerr=stds,
+            label=LABELS[method_key],
+            color=COLORS[method_key],
+            marker='o', markersize=5,
+            linewidth=2, capsize=3,
+        )
+
+    # Reference line: O(1/N) scaling
+    N0 = sample_sizes[0]
+    var0 = results[N0]['naive_var']['mean']
+    ref_line = [var0 * N0 / n for n in sample_sizes]
+    ax.plot(sample_sizes, ref_line, 'k--', alpha=0.3, label='$O(1/N)$ reference')
+
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    ax.set_xlabel('Number of Samples (N)')
+    ax.set_ylabel('Estimator Variance')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def plot_variance_reduction_factors(
+    results: dict,
+    save_path: str,
+    title: str = "Variance Reduction Factor (lower = better)",
+):
+    """Bar chart of variance reduction factors at fixed N.
+
+    Shows ratio: var(enhanced) / var(naive). Values < 1 = improvement.
+    Uses the largest N available.
+    """
+    sample_sizes = sorted(results.keys())
+    N = sample_sizes[-1]  # Use largest N
+
+    methods = [
+        ('stein_var_reduction', 'Stein CV'),
+        ('anti_var_reduction', 'Antithetic'),
+    ]
+
+    # Also compute hybrid / naive ratio
+    if 'hybrid_var' in results[N] and 'naive_var' in results[N]:
+        hybrid_ratio_mean = results[N]['hybrid_var']['mean'] / (
+            results[N]['naive_var']['mean'] + 1e-20
+        )
+        methods.append(('_hybrid_ratio', 'MCMC + Stein CV'))
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    names = []
+    means = []
+    stds = []
+
+    for key, label in methods:
+        if key.startswith('_'):
+            # Computed ratio, not directly in results
+            names.append(label)
+            means.append(hybrid_ratio_mean)
+            stds.append(0)
+        elif key in results[N]:
+            names.append(label)
+            means.append(results[N][key]['mean'])
+            stds.append(results[N][key]['std'])
+
+    colors = ['#ff7f0e', '#2ca02c', '#9467bd'][:len(names)]
+    bars = ax.bar(names, means, yerr=stds, color=colors,
+                  capsize=5, edgecolor='black', linewidth=0.5)
+
+    ax.axhline(y=1.0, color='red', linestyle='--', alpha=0.5,
+               label='No improvement (ratio = 1)')
+    ax.set_ylabel('Var(enhanced) / Var(naive)')
+    ax.set_title(f'{title}\n(N = {N}, averaged over seeds)')
+    ax.legend()
+
+    # Annotate bars
+    for bar, mean in zip(bars, means):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.02,
+                f'{mean:.3f}', ha='center', va='bottom', fontsize=10)
+
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def plot_ksd_across_samples(
+    results: dict,
+    save_path: str,
+    title: str = "KSD² vs Sample Size",
+):
+    """Plot KSD² (should be roughly constant in N, measures distributional gap)."""
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    sample_sizes = sorted(results.keys())
+    means = [results[n]['ksd_squared']['mean'] for n in sample_sizes]
+    stds = [results[n]['ksd_squared']['std'] for n in sample_sizes]
+
+    ax.errorbar(sample_sizes, means, yerr=stds,
+                color='#e377c2', marker='s', markersize=6,
+                linewidth=2, capsize=3)
+    ax.set_xscale('log')
+    ax.set_xlabel('Number of Samples (N)')
+    ax.set_ylabel('KSD²')
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def plot_mcmc_ablation(
+    results_by_mh_steps: dict,
+    save_path: str,
+    gt_mean_energy: float,
+    title: str = "Effect of MCMC Steps on Estimation Error",
+):
+    """Plot estimation error vs number of MH correction steps.
+
+    Args:
+        results_by_mh_steps: dict mapping mh_steps -> single_run_evaluation result
+        save_path: path to save
+        gt_mean_energy: ground truth
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+
+    steps = sorted(results_by_mh_steps.keys())
+
+    # Left: error vs MH steps
+    errors_mcmc = [abs(results_by_mh_steps[k]['mcmc_mean_energy'] - gt_mean_energy)
+                   for k in steps]
+    errors_hybrid = [abs(results_by_mh_steps[k]['hybrid_estimate'] - gt_mean_energy)
+                     for k in steps]
+
+    ax1.plot(steps, errors_mcmc, 'o-', color=COLORS['mcmc'],
+             label='MCMC only', linewidth=2, markersize=6)
+    ax1.plot(steps, errors_hybrid, 's-', color=COLORS['hybrid'],
+             label='MCMC + Stein CV', linewidth=2, markersize=6)
+    ax1.axhline(y=abs(results_by_mh_steps[0]['naive_mean_energy'] - gt_mean_energy),
+                color=COLORS['naive'], linestyle='--', label='Vanilla (no MCMC)')
+    ax1.set_xlabel('MH Steps (K)')
+    ax1.set_ylabel('|Estimated - Ground Truth|')
+    ax1.set_title('Estimation Error')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Right: acceptance rate vs MH steps
+    acc_rates = [results_by_mh_steps[k].get('mcmc_acceptance', 0) for k in steps]
+    ax2.plot(steps, acc_rates, 'o-', color='#17becf', linewidth=2, markersize=6)
+    ax2.set_xlabel('MH Steps (K)')
+    ax2.set_ylabel('Acceptance Rate')
+    ax2.set_title('MH Acceptance Rate')
+    ax2.set_ylim(0, 1)
+    ax2.grid(True, alpha=0.3)
+
+    fig.suptitle(title, fontsize=14, y=1.02)
+    fig.tight_layout()
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def plot_antithetic_correlation(
+    results: dict,
+    save_path: str,
+    title: str = "Antithetic Correlation vs Sample Size",
+):
+    """Plot the correlation between original and antithetic trajectories.
+
+    Negative correlation = antithetic is working.
+    """
+    fig, ax = plt.subplots(figsize=(6, 4))
+
+    sample_sizes = sorted(results.keys())
+    means = [results[n]['anti_correlation']['mean'] for n in sample_sizes]
+    stds = [results[n]['anti_correlation']['std'] for n in sample_sizes]
+
+    ax.errorbar(sample_sizes, means, yerr=stds,
+                color=COLORS['antithetic'], marker='o', markersize=6,
+                linewidth=2, capsize=3)
+    ax.axhline(y=0, color='black', linestyle='-', alpha=0.3)
+    ax.set_xscale('log')
+    ax.set_xlabel('Number of Samples (N)')
+    ax.set_ylabel('Correlation(f(X), f(X\'))')
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+
+    # Annotate: negative = good, positive = no benefit
+    ax.text(0.95, 0.95, 'Negative = variance reduced',
+            transform=ax.transAxes, ha='right', va='top',
+            fontsize=9, style='italic', alpha=0.6)
+
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def plot_summary_table(
+    results: dict,
+    save_path: str,
+    gt_mean_energy: Optional[float] = None,
+    title: str = "Summary",
+):
+    """Generate a summary table as an image.
+
+    Shows all methods side-by-side at the largest N.
+    """
+    sample_sizes = sorted(results.keys())
+    N = sample_sizes[-1]
+    r = results[N]
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.axis('off')
+
+    rows = [
+        ['Vanilla ASBS',
+         f"{r['naive_mean_energy']['mean']:.4f} ± {r['naive_mean_energy']['std']:.4f}",
+         f"{r['naive_var']['mean']:.2e}",
+         f"{r.get('error_naive', {}).get('mean', 'N/A')}",
+         "1.000"],
+        ['Stein CV',
+         f"{r['stein_cv_estimate']['mean']:.4f} ± {r['stein_cv_estimate']['std']:.4f}",
+         f"{r['stein_cv_var']['mean']:.2e}",
+         f"{r.get('error_stein', {}).get('mean', 'N/A')}",
+         f"{r['stein_var_reduction']['mean']:.3f}"],
+        ['Antithetic',
+         f"{r['anti_estimate']['mean']:.4f} ± {r['anti_estimate']['std']:.4f}",
+         f"{r['anti_var']['mean']:.2e}",
+         f"{r.get('error_anti', {}).get('mean', 'N/A')}",
+         f"{r['anti_var_reduction']['mean']:.3f}"],
+        ['MCMC (K=10)',
+         f"{r['mcmc_mean_energy']['mean']:.4f} ± {r['mcmc_mean_energy']['std']:.4f}",
+         f"{r['mcmc_var']['mean']:.2e}",
+         f"{r.get('error_mcmc', {}).get('mean', 'N/A')}",
+         "—"],
+        ['MCMC + Stein CV',
+         f"{r['hybrid_estimate']['mean']:.4f} ± {r['hybrid_estimate']['std']:.4f}",
+         f"{r['hybrid_var']['mean']:.2e}",
+         f"{r.get('error_hybrid', {}).get('mean', 'N/A')}",
+         "—"],
+        ['Generator Stein CV',
+         f"{r['gen_stein_estimate']['mean']:.4f} ± {r['gen_stein_estimate']['std']:.4f}",
+         f"{r['gen_stein_var']['mean']:.2e}",
+         f"{r.get('error_gen_stein', {}).get('mean', 'N/A')}",
+         "—"],
+    ]
+
+    if gt_mean_energy is not None:
+        rows.insert(0, ['Ground Truth', f"{gt_mean_energy:.4f}", '—', '0', '—'])
+
+    col_labels = ['Method', 'Mean Energy', 'Variance', '|Error|', 'Var Ratio']
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=col_labels,
+        loc='center',
+        cellLoc='center',
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1.2, 1.5)
+
+    # Color the header
+    for j in range(len(col_labels)):
+        table[0, j].set_facecolor('#4472C4')
+        table[0, j].set_text_props(color='white', fontweight='bold')
+
+    ax.set_title(f'{title} (N = {N}, {len(r["naive_mean_energy"]["values"])} seeds)',
+                 fontsize=14, pad=20)
+    fig.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved: {save_path}")
+
+
+def generate_all_plots(
+    results: dict,
+    output_dir: str,
+    experiment_name: str,
+    gt_mean_energy: Optional[float] = None,
+):
+    """Generate all plots for a given experiment.
+
+    Args:
+        results: output of full_evaluation()
+        output_dir: directory to save plots
+        experiment_name: e.g., 'dw4_asbs', 'lj13_asbs'
+        gt_mean_energy: ground truth mean energy
+    """
+    out = Path(output_dir) / experiment_name
+    out.mkdir(parents=True, exist_ok=True)
+
+    plot_estimation_error_vs_samples(
+        results, str(out / 'error_vs_N.png'),
+        gt_mean_energy=gt_mean_energy,
+        title=f'{experiment_name}: Estimation Error vs N',
+    )
+
+    plot_variance_comparison(
+        results, str(out / 'variance_vs_N.png'),
+        title=f'{experiment_name}: Estimator Variance vs N',
+    )
+
+    plot_variance_reduction_factors(
+        results, str(out / 'variance_reduction_bars.png'),
+        title=f'{experiment_name}: Variance Reduction',
+    )
+
+    plot_ksd_across_samples(
+        results, str(out / 'ksd_vs_N.png'),
+        title=f'{experiment_name}: KSD²',
+    )
+
+    plot_antithetic_correlation(
+        results, str(out / 'antithetic_correlation.png'),
+        title=f'{experiment_name}: Antithetic Correlation',
+    )
+
+    plot_summary_table(
+        results, str(out / 'summary_table.png'),
+        gt_mean_energy=gt_mean_energy,
+        title=experiment_name,
+    )
+
+    print(f"\nAll plots saved to {out}/")
+```
+
+### 10.3 The Full Evaluation Runner (`run_evaluation.py`)
+
+This is the script the user actually runs.
+
+```python
+"""
+run_evaluation.py
+
+Complete evaluation pipeline: load checkpoint, run all enhancements,
+generate plots and summary.
+
+Usage:
+    python run_evaluation.py experiment=dw4_asbs \
+        checkpoint=checkpoints/checkpoint_4999.pt \
+        output_dir=eval_results
+"""
+
+import hydra
+import torch
+import numpy as np
+from pathlib import Path
+from omegaconf import DictConfig
+
+from adjoint_samplers.components.sde import ControlledSDE
+from adjoint_samplers.utils import train_utils
+from adjoint_samplers.utils.graph_utils import remove_mean
+
+from enhancements.evaluation import (
+    EvalConfig, full_evaluation, single_run_evaluation, save_results,
+)
+from enhancements.visualization import generate_all_plots
+from enhancements.mcmc_correction import mh_correct
+from enhancements.visualization import plot_mcmc_ablation
+
+
+@hydra.main(config_path="configs", config_name="train.yaml", version_base="1.1")
+def main(cfg: DictConfig):
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+
+    output_dir = cfg.get('output_dir', 'eval_results')
+
+    # --- Setup ---
+    energy = hydra.utils.instantiate(cfg.energy, device=device)
+    source = hydra.utils.instantiate(cfg.source, device=device)
+    ref_sde = hydra.utils.instantiate(cfg.ref_sde).to(device)
+    controller = hydra.utils.instantiate(cfg.controller).to(device)
+    sde = ControlledSDE(ref_sde, controller).to(device)
+
+    # Load checkpoint
+    ckpt_path = Path(cfg.get('checkpoint', 'checkpoints/checkpoint_latest.pt'))
+    assert ckpt_path.exists(), f"Not found: {ckpt_path}"
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    controller.load_state_dict(ckpt["controller"])
+    print(f"Loaded: {ckpt_path}")
+
+    timesteps = train_utils.get_timesteps(**cfg.timesteps).to(device)
+
+    # --- Ground truth from reference samples ---
+    evaluator = hydra.utils.instantiate(cfg.evaluator, energy=energy)
+    gt_mean_energy = None
+    if hasattr(evaluator, 'ref_samples'):
+        ref = evaluator.ref_samples.to(device)
+        ref_E = energy.eval(ref)
+        gt_mean_energy = ref_E.mean().item()
+        print(f"Ground truth mean energy: {gt_mean_energy:.6f}")
+
+    # --- Main evaluation ---
+    print("\n========== MAIN EVALUATION ==========")
+    eval_config = EvalConfig(
+        n_seeds=10,
+        sample_sizes=[100, 500, 1000, 2000],
+        max_stein_samples=2000,
+    )
+    results = full_evaluation(
+        sde, source, energy, timesteps, device,
+        gt_mean_energy=gt_mean_energy,
+        config=eval_config,
+    )
+
+    # Save raw results
+    save_results(results, f'{output_dir}/{cfg.exp_name}/results.json')
+
+    # --- MCMC ablation ---
+    print("\n========== MCMC ABLATION ==========")
+    mcmc_results = {}
+    for K in [0, 5, 10, 20, 50]:
+        torch.manual_seed(0)
+        run = single_run_evaluation(
+            sde, source, energy, timesteps,
+            n_samples=2000, mh_steps=K,
+            stein_reg_lambda=1e-4,
+            device=device,
+            gt_mean_energy=gt_mean_energy,
+        )
+        mcmc_results[K] = run
+        print(f"  K={K}: error_mcmc={run.get('error_mcmc', 'N/A'):.6f}, "
+              f"acceptance={run.get('mcmc_acceptance', 0):.4f}")
+
+    # --- Generate all plots ---
+    print("\n========== GENERATING PLOTS ==========")
+    generate_all_plots(
+        results, output_dir, cfg.exp_name,
+        gt_mean_energy=gt_mean_energy,
+    )
+
+    if gt_mean_energy is not None:
+        plot_mcmc_ablation(
+            mcmc_results,
+            f'{output_dir}/{cfg.exp_name}/mcmc_ablation.png',
+            gt_mean_energy=gt_mean_energy,
+            title=f'{cfg.exp_name}: MCMC Ablation',
+        )
+
+    # --- Print final summary ---
+    N_max = max(results.keys())
+    r = results[N_max]
+    print(f"\n========== FINAL SUMMARY ({cfg.exp_name}, N={N_max}) ==========")
+    if gt_mean_energy is not None:
+        print(f"  Ground truth:       {gt_mean_energy:.6f}")
+    print(f"  KSD²:               {r['ksd_squared']['mean']:.6f} ± {r['ksd_squared']['std']:.6f}")
+    print(f"  MH acceptance:      {r['mcmc_acceptance']['mean']:.4f}")
+    print(f"  Anti correlation:   {r['anti_correlation']['mean']:.4f}")
+    print()
+    print(f"  {'Method':<22} {'Estimate':>12} {'|Error|':>10} {'Var':>12} {'VarRatio':>10}")
+    print(f"  {'-'*66}")
+
+    rows = [
+        ('Vanilla',       'naive_mean_energy', 'error_naive', 'naive_var',     None),
+        ('Stein CV',      'stein_cv_estimate', 'error_stein', 'stein_cv_var',  'stein_var_reduction'),
+        ('Antithetic',    'anti_estimate',     'error_anti',  'anti_var',      'anti_var_reduction'),
+        ('MCMC',          'mcmc_mean_energy',  'error_mcmc',  'mcmc_var',      None),
+        ('MCMC+Stein',    'hybrid_estimate',   'error_hybrid','hybrid_var',    None),
+        ('Gen Stein CV',  'gen_stein_estimate','error_gen_stein','gen_stein_var', None),
+    ]
+
+    for label, est_key, err_key, var_key, vr_key in rows:
+        est = r[est_key]['mean']
+        err = r.get(err_key, {}).get('mean', float('nan'))
+        var = r[var_key]['mean']
+        vr = r.get(vr_key, {}).get('mean', float('nan')) if vr_key else float('nan')
+        vr_str = f"{vr:.3f}" if not np.isnan(vr) else "—"
+        print(f"  {label:<22} {est:>12.6f} {err:>10.6f} {var:>12.2e} {vr_str:>10}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### 10.4 Running the Full Evaluation
+
+```bash
+# Step 1: Train baseline (if not already done)
+python train.py experiment=dw4_asbs seed=0 use_wandb=false
+
+# Step 2: Run full evaluation with all enhancements
+python run_evaluation.py experiment=dw4_asbs \
+    checkpoint=checkpoints/checkpoint_latest.pt \
+    output_dir=eval_results
+
+# Step 3: Check the results
+ls eval_results/dw4_asbs/
+# Expected:
+#   results.json              <- Raw numbers
+#   error_vs_N.png            <- Error scaling plot
+#   variance_vs_N.png         <- Variance scaling plot
+#   variance_reduction_bars.png <- Bar chart of variance ratios
+#   ksd_vs_N.png              <- KSD diagnostic
+#   antithetic_correlation.png <- Antithetic correlation
+#   mcmc_ablation.png         <- MH steps ablation
+#   summary_table.png         <- Summary table image
+
+# Step 4: Repeat for other benchmarks
+python run_evaluation.py experiment=lj13_asbs \
+    checkpoint=checkpoints/checkpoint_latest.pt \
+    output_dir=eval_results
+
+python run_evaluation.py experiment=lj55_asbs \
+    checkpoint=checkpoints/checkpoint_latest.pt \
+    output_dir=eval_results
+```
+
+### 10.5 What the Plots Tell You
+
+|Plot                         |What to look for                                  |Good result                                                 |Bad result                            |
+|-----------------------------|--------------------------------------------------|------------------------------------------------------------|--------------------------------------|
+|`error_vs_N.png`             |Do enhanced methods have lower error than vanilla?|Stein/hybrid lines below vanilla                            |All lines overlap                     |
+|`variance_vs_N.png`          |Do enhanced methods have steeper decline?         |Stein CV declines faster than $O(1/N)$                      |All methods follow same slope         |
+|`variance_reduction_bars.png`|Variance ratio < 1?                               |Bars well below 1.0                                         |Bars near or above 1.0                |
+|`ksd_vs_N.png`               |Is KSD small? Consistent across N?                |Small, stable values                                        |Large or erratic values               |
+|`antithetic_correlation.png` |Is correlation negative?                          |Negative values                                             |Positive values (no benefit)          |
+|`mcmc_ablation.png`          |Does error decrease with K? Where does it plateau?|Rapid decrease, plateau at K=10-20                          |No decrease (ASBS already exact)      |
+|`summary_table.png`          |Which method wins on each metric?                 |Hybrid (MCMC+Stein) best on error; Stein CV best on variance|Vanilla wins (enhancements don’t help)|
+
+### 10.6 Interpreting Results: What “Success” Looks Like
+
+**Stein CV working:** Variance reduction factor < 0.5 (50%+ reduction). Stein estimate has lower error than naive across seeds. Effect should be stronger on DW4 (12D) than LJ55 (165D) due to kernel scaling.
+
+**Antithetic working:** Negative correlation ($< -0.1$). Variance reduction factor < 0.8. If correlation is near zero, the noise is too weak relative to drift (model is nearly deterministic) — try with fewer SDE steps or larger diffusion coefficient.
+
+**MCMC correction working:** Mean energy shifts toward ground truth with increasing K. Acceptance rate between 0.15–0.40. If acceptance rate is very high ($> 0.9$), ASBS samples are already very close to $p$ — less room for MCMC to help. If very low ($< 0.05$), step size is too large.
+
+**Hybrid (MCMC + Stein CV) working:** Should combine the error reduction of MCMC with the variance reduction of Stein CV. Should be strictly better than either alone on both metrics.
+
+**Generator Stein CV working:** Lower variance than standard Stein CV. This means the learned drift provides a better control variate basis than the generic score. If similar or worse, the standard Stein operator is sufficient.
+
+**KSD as diagnostic:** KSD should be small for a well-trained model and should correlate with the W2 metrics from the original evaluator. If KSD is large, the model hasn’t converged — more training needed before enhancements can help.
+
+### 10.7 When Enhancements Don’t Help (and What That Means)
+
+If **all enhancements show negligible improvement**, it means one of:
+
+1. **ASBS is already excellent** — $q_\theta \approx p$ so closely that bias is negligible and variance is already low. This is actually a positive result for ASBS.
+1. **Dimension too high for kernel methods** — KSD and Stein CVs use RBF kernels that degrade in high $d$. If LJ55 (165D) shows no benefit but DW4 (12D) does, this is the cause. Future work: neural Stein CVs (replace kernel with neural network).
+1. **Too few samples** — Stein CVs need $N > d$ to be effective. If $N < d$, the kernel matrix is rank-deficient and regularization dominates.
+
+Document all of these observations — negative results are informative and publishable.
