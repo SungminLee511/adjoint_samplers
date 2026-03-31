@@ -122,19 +122,28 @@ configs/                             # Hydra configs
 - 7 plot functions: error_vs_N, variance_vs_N, variance_reduction_bars, ksd_vs_N, mcmc_ablation, antithetic_correlation, summary_table
 - `generate_all_plots(results, output_dir, experiment_name, gt_mean_energy)`
 
+## Environment
+- **Conda env:** `Sampling_env` (created from `environment.yml`)
+- **NOT** `SML_env` — this project has its own heavy deps (bgflow, rdkit, openmm, mace-torch)
+- Run pattern: `conda run -n Sampling_env <command>`
+
 ## Running
 
 ### Train baseline
 ```bash
-bash scripts/download.sh  # download reference samples
-python train.py experiment=dw4_asbs seed=0 use_wandb=false
+bash scripts/download.sh  # download reference samples to data/
+conda run -n Sampling_env nohup python -u train.py experiment=dw4_asbs seed=0 use_wandb=false > logs/train_dw4.log 2>&1 &
 ```
 
 ### Run enhanced evaluation
 ```bash
-python eval_enhanced.py experiment=dw4_asbs checkpoint=checkpoints/checkpoint_latest.pt
-python run_evaluation.py experiment=dw4_asbs checkpoint=checkpoints/checkpoint_latest.pt output_dir=eval_results
+conda run -n Sampling_env nohup python -u run_evaluation.py experiment=dw4_asbs checkpoint=checkpoints/checkpoint_latest.pt output_dir=eval_results > logs/eval_dw4.log 2>&1 &
 ```
+
+### Log files
+- Training logs: `logs/train_dw4.log`, `logs/train_lj13.log`, `logs/train_lj55.log`
+- Eval logs: `logs/eval_dw4.log`, `logs/eval_lj13.log`, `logs/eval_lj55.log`
+- See `.claude/TODO/PLAN.md` for full execution plan
 
 ## Gotchas
 
