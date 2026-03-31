@@ -1,1 +1,146 @@
+# adjoint_samplers — Adjoint-Based Diffusion Sampling + Stein Enhancements
 
+## Overview
+
+Implements **Adjoint Sampling for Boltzmann-like distributions (ASBS)** with 6 Stein-based variance reduction and diagnostic enhancements. The original ASBS codebase trains a controlled SDE to sample from energy-based distributions. The `enhancements/` module adds post-hoc analysis methods.
+
+## File Tree
+
+```
+adjoint_samplers/                    # ORIGINAL — DO NOT MODIFY
+    adjoint_samplers/
+        components/
+            sde.py                   # BaseSDE, ControlledSDE, sdeint, Graph mixin
+            matcher.py               # AdjointMatcher, AdjointVEMatcher
+            evaluator.py             # SyntheticEnergyEvaluator
+            model.py                 # FourierMLP, EGNN_dynamics
+            term_cost.py             # GradEnergy
+            buffer.py                # BatchBuffer
+            state_cost.py
+        energies/
+            base_energy.py           # BaseEnergy (eval, grad_E, score)
+            double_well_energy.py    # DoubleWellEnergy (needs bgflow)
+            lennard_jones_energy.py  # LennardJonesEnergy (needs bgflow)
+            dist_energy.py
+        utils/
+            train_utils.py           # get_timesteps(), training helpers
+            eval_utils.py
+            graph_utils.py           # remove_mean, COM-free utilities
+            dist_utils.py
+    train.py                         # Original training entry point
+
+enhancements/                        # NEW — all Stein enhancement code
+    __init__.py
+    stein_kernel.py                  # Task 1: RBF kernel, Stein kernel, KSD
+    stein_cv.py                      # Task 2: Stein control variate estimator
+    antithetic.py                    # Task 3: Antithetic SDE integration
+    mcmc_correction.py               # Task 4: MH post-correction
+    enhanced_evaluator.py            # Task 5: Unified evaluation pipeline
+    generator_stein.py               # Task 6: SDE generator Stein operator
+    evaluation.py                    # Task 10: Multi-seed systematic evaluation
+    visualization.py                 # Task 10: Publication-quality plots
+
+eval_enhanced.py                     # Task 7: Single-run evaluation script (hydra)
+run_evaluation.py                    # Task 10: Full evaluation runner (hydra)
+
+tests/
+    test_stein_kernel.py
+    test_stein_cv.py
+    test_antithetic.py
+    test_mcmc_correction.py
+    test_enhanced_evaluator.py
+    test_generator_stein.py
+    test_eval_imports.py
+
+configs/                             # Hydra configs
+    train.yaml                       # Base config
+    experiment/                      # dw4_asbs, lj13_asbs, lj55_asbs, demo_asbs, etc.
+```
+
+## Key Interfaces
+
+### BaseEnergy (`adjoint_samplers/energies/base_energy.py`)
+- `eval(x: (N,D)) -> (N,)` — energy values
+- `grad_E(x: (N,D)) -> (N,D)` — energy gradients via autograd
+- `score(x: (N,D)) -> (N,D)` — returns `-grad_E(x)`
+
+### BaseSDE (`adjoint_samplers/components/sde.py`)
+- `drift(t, x) -> (B,D)` — drift f(t,x)
+- `diff(t) -> scalar` — diffusion coefficient g(t)
+- `randn_like(x)` — noise (COM-free for Graph mixin)
+- `propagate(x, dx)` — state update (COM-free for Graph mixin)
+
+### ControlledSDE
+- Wraps `ref_sde` + learned `controller`
+- `drift(t, x) = ref_sde.drift(t,x) + g(t)^2 * controller(t,x)`
+
+### sdeint(sde, state0, timesteps, only_boundary=False)
+- Euler forward integration, `@torch.no_grad()`
+- Returns `[x0, ..., xT]` or `(x0, xT)` if `only_boundary=True`
+
+## Enhancement Modules
+
+### stein_kernel.py
+- `median_bandwidth(samples)` → scalar bandwidth (median heuristic)
+- `rbf_kernel_matrix(x, y, ell)` → (N,M) RBF kernel
+- `stein_kernel_matrix(samples, scores, ell)` → (N,N) Stein kernel
+- `compute_ksd(samples, scores, ell=None)` → scalar KSD²
+
+**Sign convention:** term2 = `s^T(x-x')/ℓ²·k`, term3 = `-(x-x')^T s'/ℓ²·k`
+(Note: the math spec's "corrected" formula has wrong signs — use the derivation from ∇_x k and ∇_{x'} k)
+
+### stein_cv.py
+- `stein_cv_estimate(samples, scores, f_values, ell, reg_lambda)` → dict
+- `multi_function_stein_cv(samples, scores, f_dict, ell, reg_lambda)` → dict
+- Uses **normalized CF estimator**: `sum(a) / sum(b)` where `a = A^{-1}f`, `b = A^{-1}1`
+
+### antithetic.py
+- `sdeint_antithetic(sde, state0, timesteps, only_boundary)` → (states, states_anti) or (x0, x1, x1_anti)
+- `antithetic_estimate(f_values, f_values_anti)` → dict with correlation, variance reduction
+
+### mcmc_correction.py
+- `mh_correct(samples, energy, n_steps, step_size)` → dict with corrected_samples, acceptance_rate
+- Auto step size: `2.38/sqrt(D) * marginal_std`
+- Uses `TYPE_CHECKING` guard for BaseEnergy (avoids bgflow import)
+
+### generator_stein.py
+- `generator_stein_kernel_matrix(samples, sde, ell)` → (N,N) generator Stein kernel
+- `generator_stein_cv_estimate(samples, sde, f_values, ell, reg_lambda)` → dict
+- Replaces `s_p(x)` with `b_theta(x,1)` (learned drift), uses `g(1)²/2` in trace term
+
+### enhanced_evaluator.py
+- `evaluate_enhanced(samples, energy, ref_energies, mh_steps, stein_reg_lambda, max_stein_samples)` → dict
+- Runs: KSD → naive → Stein CV → MCMC → hybrid (MCMC+Stein CV) → ground truth comparison
+
+### evaluation.py
+- `EvalConfig` dataclass: n_seeds, sample_sizes, mh_steps_list, etc.
+- `single_run_evaluation(...)` → dict of scalar metrics
+- `full_evaluation(...)` → nested dict with mean/std across seeds
+- `save_results(results, path)` → JSON export
+
+### visualization.py
+- 7 plot functions: error_vs_N, variance_vs_N, variance_reduction_bars, ksd_vs_N, mcmc_ablation, antithetic_correlation, summary_table
+- `generate_all_plots(results, output_dir, experiment_name, gt_mean_energy)`
+
+## Running
+
+### Train baseline
+```bash
+bash scripts/download.sh  # download reference samples
+python train.py experiment=dw4_asbs seed=0 use_wandb=false
+```
+
+### Run enhanced evaluation
+```bash
+python eval_enhanced.py experiment=dw4_asbs checkpoint=checkpoints/checkpoint_latest.pt
+python run_evaluation.py experiment=dw4_asbs checkpoint=checkpoints/checkpoint_latest.pt output_dir=eval_results
+```
+
+## Gotchas
+
+1. **bgflow dependency**: `double_well_energy.py` and `lennard_jones_energy.py` import bgflow. Use `TYPE_CHECKING` guards when importing BaseEnergy at module level.
+2. **Stein kernel signs**: The math spec's "corrected" formula (Section 1.4 Note) has BOTH term2 and term3 signs wrong. Use: term2 = `+s^T(x-x')/ℓ²·k`, term3 = `-(x-x')^T s'/ℓ²·k`.
+3. **Normalized CF estimator**: Raw `1^T a` diverges because the Stein RKHS can't represent constants. Must use normalized form: `sum(a)/sum(b)`.
+4. **COM-free particles**: Graph SDEs use `sde.randn_like()` and `sde.propagate()` which project to zero center-of-mass. Antithetic sampling must use these, not `torch.randn_like`.
+5. **O(N²) memory**: Stein kernel matrix is N×N. Cap at `max_stein_samples=2000` and subsample.
+6. **sdeint is @torch.no_grad()**: No gradients flow through forward integration.
