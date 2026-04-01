@@ -34,6 +34,8 @@ COLORS = {
     'hybrid': '#9467bd',
     'gen_stein': '#8c564b',
     'neural_cv': '#e377c2',
+    'egnn_cv': '#7f7f7f',
+    'rbf_cv': '#bcbd22',
 }
 
 LABELS = {
@@ -44,6 +46,8 @@ LABELS = {
     'hybrid': 'MCMC + Stein CV',
     'gen_stein': 'Generator Stein CV',
     'neural_cv': 'Neural Stein CV',
+    'egnn_cv': 'EGNN Stein CV',
+    'rbf_cv': 'RBF Collocation CV',
 }
 
 
@@ -66,6 +70,8 @@ def plot_estimation_error_vs_samples(
         ('error_hybrid', 'hybrid'),
         ('error_gen_stein', 'gen_stein'),
         ('error_neural_cv', 'neural_cv'),
+        ('error_egnn_cv', 'egnn_cv'),
+        ('error_rbf_cv', 'rbf_cv'),
     ]
 
     for metric_key, method_key in methods:
@@ -115,6 +121,8 @@ def plot_variance_comparison(
         ('hybrid_var', 'hybrid'),
         ('gen_stein_var', 'gen_stein'),
         ('neural_cv_var', 'neural_cv'),
+        ('egnn_cv_var', 'egnn_cv'),
+        ('rbf_cv_var', 'rbf_cv'),
     ]
 
     for var_key, method_key in variance_methods:
@@ -164,6 +172,8 @@ def plot_variance_reduction_factors(
         ('stein_var_reduction', 'Stein CV (RKHS)'),
         ('anti_var_reduction', 'Antithetic'),
         ('neural_cv_var_reduction', 'Neural Stein CV'),
+        ('egnn_cv_var_reduction', 'EGNN Stein CV'),
+        ('rbf_cv_var_reduction', 'RBF Collocation CV'),
     ]
 
     # Also compute hybrid / naive ratio
@@ -174,7 +184,7 @@ def plot_variance_reduction_factors(
         )
         methods.append(('_hybrid_ratio', 'MCMC + Stein CV'))
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, ax = plt.subplots(figsize=(10, 4))
 
     names = []
     means = []
@@ -190,7 +200,7 @@ def plot_variance_reduction_factors(
             means.append(results[N][key]['mean'])
             stds.append(results[N][key]['std'])
 
-    colors = ['#ff7f0e', '#2ca02c', '#e377c2', '#9467bd'][:len(names)]
+    colors = ['#ff7f0e', '#2ca02c', '#e377c2', '#7f7f7f', '#bcbd22', '#9467bd'][:len(names)]
     bars = ax.bar(names, means, yerr=stds, color=colors,
                   capsize=5, edgecolor='black', linewidth=0.5)
 
@@ -323,7 +333,7 @@ def plot_summary_table(
     N = sample_sizes[-1]
     r = results[N]
 
-    fig, ax = plt.subplots(figsize=(10, 4))
+    fig, ax = plt.subplots(figsize=(11, 5))
     ax.axis('off')
 
     def fmt_mean_std(key):
@@ -361,6 +371,12 @@ def plot_summary_table(
         ['Neural Stein CV', fmt_mean_std('neural_cv_estimate'),
          fmt_val('neural_cv_var'), fmt_err('error_neural_cv'),
          fmt_val('neural_cv_var_reduction', '.3f')],
+        ['EGNN Stein CV', fmt_mean_std('egnn_cv_estimate'),
+         fmt_val('egnn_cv_var'), fmt_err('error_egnn_cv'),
+         fmt_val('egnn_cv_var_reduction', '.3f')],
+        ['RBF Collocation CV', fmt_mean_std('rbf_cv_estimate'),
+         fmt_val('rbf_cv_var'), fmt_err('error_rbf_cv'),
+         fmt_val('rbf_cv_var_reduction', '.3f')],
     ]
 
     if gt_mean_energy is not None:

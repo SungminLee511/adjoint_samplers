@@ -7,6 +7,7 @@ all enhancements compared against baseline, with statistics.
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Optional, List
+import time
 
 import torch
 import numpy as np
@@ -26,6 +27,8 @@ from enhancements.antithetic import sdeint_antithetic, antithetic_estimate
 from enhancements.mcmc_correction import mh_correct
 from enhancements.generator_stein import generator_stein_cv_estimate
 from enhancements.neural_stein_cv import NeuralSteinCV, train_neural_stein_cv
+from enhancements.egnn_stein_cv import EGNNSteinCV
+from enhancements.rbf_collocation_cv import rbf_collocation_cv
 
 
 @dataclass
@@ -33,16 +36,34 @@ class EvalConfig:
     """Configuration for the systematic evaluation."""
     n_seeds: int = 10                          # Number of independent runs
     sample_sizes: List[int] = field(           # Sample sizes to test scaling
-        default_factory=lambda: [100, 500, 1000, 2000]
+        default_factory=lambda: [500, 1000, 2000, 5000]
     )
     mh_steps_list: List[int] = field(          # MH steps to ablate
-        default_factory=lambda: [0, 5, 10, 20]
+        default_factory=lambda: [0, 5, 10, 20, 50]
     )
     stein_reg_lambdas: List[float] = field(    # Stein regularization to ablate
         default_factory=lambda: [1e-6, 1e-4, 1e-2]
     )
-    max_stein_samples: int = 2000              # Memory cap for Stein kernel
-    eval_batch_size: int = 2000                # Batch size for generation
+    max_stein_samples: int = 5000              # Memory cap for Stein kernel
+    eval_batch_size: int = 5000                # Batch size for generation
+    # Neural CV (MLP)
+    neural_cv_epochs: int = 2000               # Training epochs
+    neural_cv_hidden_dim: int = 512            # Hidden dim
+    neural_cv_n_layers: int = 5                # Network depth
+    neural_cv_batch_size: int = 512            # Mini-batch size
+    neural_cv_lr: float = 5e-4                 # Learning rate (lower for stability)
+    # EGNN CV
+    egnn_cv_epochs: int = 2000                 # Training epochs
+    egnn_cv_hidden_nf: int = 128               # Hidden dim per EGNN layer
+    egnn_cv_n_layers: int = 6                  # EGNN depth
+    egnn_cv_batch_size: int = 512              # Mini-batch size
+    egnn_cv_lr: float = 5e-4                   # Learning rate
+    # RBF Collocation CV
+    rbf_n_centers: int = 500                   # Number of RBF centers
+    rbf_reg_lambda: float = 1e-6               # Tikhonov regularization
+    # Particle structure (needed for EGNN — set per experiment)
+    n_particles: Optional[int] = None
+    spatial_dim: Optional[int] = None
 
 
 def generate_samples(
@@ -75,17 +96,22 @@ def single_run_evaluation(
     stein_reg_lambda: float,
     device: str,
     gt_mean_energy: Optional[float] = None,
+    config: Optional[EvalConfig] = None,
 ) -> dict:
-    """Run one complete evaluation: generate samples, apply all enhancements.
+    """Run one complete evaluation: generate samples, apply all 9 enhancements.
 
     Returns a dict of scalar metrics.
     """
+    if config is None:
+        config = EvalConfig()
+
     results = {}
+    t0_total = time.time()
 
     # --- Generate samples ---
     samples = generate_samples(
         sde, source, timesteps, n_samples,
-        batch_size=min(n_samples, 2000), device=device,
+        batch_size=min(n_samples, config.eval_batch_size), device=device,
     )
     N, D = samples.shape
 
@@ -99,13 +125,13 @@ def single_run_evaluation(
     results['naive_var'] = (energies.var() / N).item()
 
     # --- 2. KSD ---
-    N_ksd = min(N, 2000)
+    N_ksd = min(N, config.max_stein_samples)
     idx = torch.randperm(N, device=device)[:N_ksd]
     ksd_sq = compute_ksd(samples[idx], scores[idx])
     results['ksd_squared'] = ksd_sq.item()
 
-    # --- 3. Stein CV ---
-    N_s = min(N, 2000)
+    # --- 3. Stein CV (RKHS) ---
+    N_s = min(N, config.max_stein_samples)
     idx_s = torch.randperm(N, device=device)[:N_s]
     scv = stein_cv_estimate(
         samples[idx_s], scores[idx_s], energies[idx_s],
@@ -118,7 +144,7 @@ def single_run_evaluation(
     )
 
     # --- 4. Antithetic ---
-    N_anti = min(N, 1000)
+    N_anti = min(N, 2000)
     x0_anti = source.sample([N_anti]).to(device)
     _, x1_orig, x1_anti = sdeint_antithetic(
         sde, x0_anti, timesteps, only_boundary=True
@@ -142,7 +168,7 @@ def single_run_evaluation(
 
         # --- 6. MCMC + Stein CV (hybrid) ---
         corrected_scores = energy.score(corrected)
-        N_h = min(N, 2000)
+        N_h = min(N, config.max_stein_samples)
         idx_h = torch.randperm(N, device=device)[:N_h]
         hybrid = stein_cv_estimate(
             corrected[idx_h], corrected_scores[idx_h],
@@ -159,7 +185,7 @@ def single_run_evaluation(
         results['hybrid_var'] = results['stein_cv_var']
 
     # --- 7. Generator Stein CV ---
-    N_g = min(N, 1000)
+    N_g = min(N, config.max_stein_samples)
     idx_g = torch.randperm(N, device=device)[:N_g]
     gen = generator_stein_cv_estimate(
         samples[idx_g], sde, energies[idx_g],
@@ -168,21 +194,21 @@ def single_run_evaluation(
     results['gen_stein_estimate'] = gen['estimate']
     results['gen_stein_var'] = gen['variance_gen_stein']
 
-    # --- 8. Neural Stein CV ---
-    D = samples.shape[1]
-    neural_epochs = 500 if D <= 40 else 1000
+    # --- 8. Neural Stein CV (MLP) ---
     hutch = 0 if D <= 20 else 1
     g_model = NeuralSteinCV(
-        dim=D, hidden_dim=min(256, max(64, D * 2)), n_layers=3,
+        dim=D,
+        hidden_dim=config.neural_cv_hidden_dim,
+        n_layers=config.neural_cv_n_layers,
     ).to(device)
     neural_result = train_neural_stein_cv(
         g_model,
         samples,
         energy,
         f_func=lambda x: energy.eval(x),
-        n_epochs=neural_epochs,
-        batch_size=min(256, N),
-        lr=1e-3,
+        n_epochs=config.neural_cv_epochs,
+        batch_size=min(config.neural_cv_batch_size, N),
+        lr=config.neural_cv_lr,
         hutchinson_samples=hutch,
         verbose=False,
     )
@@ -190,7 +216,55 @@ def single_run_evaluation(
     results['neural_cv_var'] = neural_result['variance_neural']
     results['neural_cv_var_reduction'] = neural_result['variance_reduction']
 
-    # --- 9. Errors vs ground truth ---
+    # --- 9. EGNN Stein CV ---
+    if config.n_particles is not None and config.spatial_dim is not None:
+        egnn_model = EGNNSteinCV(
+            n_particles=config.n_particles,
+            spatial_dim=config.spatial_dim,
+            hidden_nf=config.egnn_cv_hidden_nf,
+            n_layers=config.egnn_cv_n_layers,
+        ).to(device)
+        egnn_result = train_neural_stein_cv(
+            egnn_model,
+            samples,
+            energy,
+            f_func=lambda x: energy.eval(x),
+            n_epochs=config.egnn_cv_epochs,
+            batch_size=min(config.egnn_cv_batch_size, N),
+            lr=config.egnn_cv_lr,
+            hutchinson_samples=max(1, hutch),  # Always Hutchinson for EGNN (expensive fwd)
+            verbose=False,
+        )
+        results['egnn_cv_estimate'] = egnn_result['estimate']
+        results['egnn_cv_var'] = egnn_result['variance_neural']
+        results['egnn_cv_var_reduction'] = egnn_result['variance_reduction']
+    else:
+        results['egnn_cv_estimate'] = results['naive_mean_energy']
+        results['egnn_cv_var'] = results['naive_var']
+        results['egnn_cv_var_reduction'] = 1.0
+
+    # --- 10. RBF Collocation CV ---
+    if D <= 50:  # Only practical for low-to-medium dimensions
+        with torch.no_grad():
+            f_grad = -scores.detach()  # grad_E = -score
+        rbf_result = rbf_collocation_cv(
+            samples.detach(), scores.detach(),
+            energies.detach(), f_grad,
+            energy=energy,
+            n_centers=config.rbf_n_centers,
+            reg_lambda=config.rbf_reg_lambda,
+        )
+        results['rbf_cv_estimate'] = rbf_result['estimate']
+        results['rbf_cv_var'] = rbf_result['variance_rbf']
+        results['rbf_cv_var_reduction'] = rbf_result['variance_reduction']
+    else:
+        results['rbf_cv_estimate'] = results['naive_mean_energy']
+        results['rbf_cv_var'] = results['naive_var']
+        results['rbf_cv_var_reduction'] = 1.0
+
+    results['eval_time_seconds'] = time.time() - t0_total
+
+    # --- 11. Errors vs ground truth ---
     if gt_mean_energy is not None:
         gt = gt_mean_energy
         results['error_naive'] = abs(results['naive_mean_energy'] - gt)
@@ -200,6 +274,8 @@ def single_run_evaluation(
         results['error_hybrid'] = abs(results['hybrid_estimate'] - gt)
         results['error_gen_stein'] = abs(results['gen_stein_estimate'] - gt)
         results['error_neural_cv'] = abs(results['neural_cv_estimate'] - gt)
+        results['error_egnn_cv'] = abs(results['egnn_cv_estimate'] - gt)
+        results['error_rbf_cv'] = abs(results['rbf_cv_estimate'] - gt)
 
     return results
 
@@ -243,12 +319,15 @@ def full_evaluation(
                 stein_reg_lambda=1e-4,
                 device=device,
                 gt_mean_energy=gt_mean_energy,
+                config=config,
             )
             seed_results.append(run)
             print(f"  seed {seed}: naive={run['naive_mean_energy']:.4f}, "
                   f"stein={run['stein_cv_estimate']:.4f}, "
-                  f"hybrid={run['hybrid_estimate']:.4f}, "
-                  f"neural={run['neural_cv_estimate']:.4f}")
+                  f"neural={run['neural_cv_estimate']:.4f}, "
+                  f"egnn={run['egnn_cv_estimate']:.4f}, "
+                  f"rbf={run['rbf_cv_estimate']:.4f} "
+                  f"({run['eval_time_seconds']:.1f}s)")
 
         # Aggregate across seeds
         all_keys = seed_results[0].keys()

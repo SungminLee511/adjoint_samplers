@@ -2296,3 +2296,281 @@ if gt_mean_energy is not None:
 1. **Network size**: Hidden dim should be $\approx 2d$ to $4d$. Too small → can’t approximate the Poisson solution. Too large → overfits to the sample set.
 1. **Comparison with RKHS**: On DW4, compare `variance_neural` vs `variance_stein` from the RKHS method. On LJ55, the neural method should dominate because the kernel degrades in 165 dimensions.
 1. **The bias-variance coupling applies here too**: The PDE loss $|\nabla h|^2$ makes $h$ approximately constant, which simultaneously reduces variance and bias (Section 2.7 of MATH_SPEC). The neural network directly approximates the Poisson equation solution — the same solution that the RKHS method approximates indirectly via variance minimization.
+
+-----
+
+## Task 12: Equivariant Neural Stein CV (EGNN Architecture)
+
+**Reference:** MATH_SPEC Section 7B
+
+### 12.1 Overview
+
+Replace the MLP backbone in `NeuralSteinCV` with an EGNN that respects E(3) symmetry of molecular systems. The EGNN architecture is already available in the codebase (`adjoint_samplers/components/model.py: EGNN_dynamics`).
+
+### 12.2 New File: `enhancements/egnn_stein_cv.py`
+
+```python
+class EGNNSteinCV(nn.Module):
+    """EGNN-based g_phi: R^d -> R^d for Stein control variate.
+
+    Exploits particle structure and E(3) equivariance.
+    Output = coordinate displacement (equivariant vector field).
+    """
+    def __init__(
+        self,
+        n_particles: int,
+        spatial_dim: int,
+        hidden_nf: int = 64,
+        n_layers: int = 4,
+        recurrent: bool = True,
+        attention: bool = True,
+        tanh: bool = True,
+    ):
+        super().__init__()
+        self.n_particles = n_particles
+        self.spatial_dim = spatial_dim
+        self.dim = n_particles * spatial_dim
+
+        # Reuse the existing EGNN_dynamics class
+        # BUT: set condition_time=False (no time dimension for Stein CV)
+        from adjoint_samplers.components.model import EGNN_dynamics
+        self.egnn = EGNN_dynamics(
+            n_particles=n_particles,
+            spatial_dim=spatial_dim,
+            hidden_nf=hidden_nf,
+            n_layers=n_layers,
+            recurrent=recurrent,
+            attention=attention,
+            tanh=tanh,
+            condition_time=False,  # No time conditioning for terminal-time CV
+            act_fn=torch.nn.SiLU(),
+        )
+
+        # Scale output small initially (like NeuralSteinCV)
+        self.output_scale = nn.Parameter(torch.tensor(0.01))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (B, n_particles * spatial_dim) flat coordinates
+        Returns:
+            g: (B, n_particles * spatial_dim) equivariant vector field
+        """
+        # EGNN_dynamics.forward expects (t, xs) — pass dummy t=0
+        dummy_t = torch.zeros(x.shape[0], device=x.device)
+        g = self.egnn(dummy_t, x)
+        return g * self.output_scale
+```
+
+### 12.3 Training
+
+Training uses the **exact same** `train_neural_stein_cv()` function from `neural_stein_cv.py`. Just pass `EGNNSteinCV` instead of `NeuralSteinCV` as the model:
+
+```python
+from enhancements.egnn_stein_cv import EGNNSteinCV
+
+g_model = EGNNSteinCV(
+    n_particles=4, spatial_dim=2,  # DW4
+    hidden_nf=64, n_layers=4,
+).to(device)
+
+result = train_neural_stein_cv(
+    g_model, samples, energy, f_func,
+    n_epochs=1000,  # May need more epochs due to equivariance constraints
+    batch_size=256, lr=1e-3,
+    hutchinson_samples=0,  # Exact for DW4 (8D)
+)
+```
+
+### 12.4 Integration with Evaluation Pipeline
+
+Add as method #8 in `enhanced_evaluator.py` and `evaluation.py`. The evaluation code should:
+
+1. Detect `n_particles` and `spatial_dim` from the energy/config
+2. Instantiate `EGNNSteinCV` with matching particle structure
+3. Train and evaluate alongside the MLP Neural CV
+4. Report `egnn_cv_estimate`, `egnn_cv_var`, `egnn_cv_var_reduction`
+
+### 12.5 Key Implementation Notes
+
+1. **condition_time=False:** The Stein CV operates only at terminal time (t=1). Time conditioning is unnecessary and adds parameters.
+2. **output_scale:** Initialize small (0.01) so $g_\phi \approx 0$ at start, same reasoning as the MLP zero-init.
+3. **Mean removal:** `EGNN_dynamics.forward()` already calls `remove_mean()` on the output. This is correct — it ensures COM is preserved.
+4. **Divergence computation:** Use Hutchinson estimator even for DW4 — EGNN forward pass is expensive, so d=8 backward passes may be slower than 1-2 Hutchinson probes.
+5. **Config for each system:**
+   - DW4: `n_particles=4, spatial_dim=2, hidden_nf=64, n_layers=4`
+   - LJ13: `n_particles=13, spatial_dim=3, hidden_nf=64, n_layers=4`
+   - LJ55: `n_particles=55, spatial_dim=3, hidden_nf=64, n_layers=3` (fewer layers to control cost)
+
+-----
+
+## Task 13: RBF Collocation Stein CV (Classical PDE Solver)
+
+**Reference:** MATH_SPEC Section 7C
+
+### 13.1 Overview
+
+Solve the differentiated Poisson equation $\nabla_x(f + \mathcal{A}_p g) = 0$ using mesh-free RBF collocation. Instead of training a neural network iteratively, expand $g$ in an RBF basis and solve the resulting **linear least-squares** problem in one shot.
+
+### 13.2 New File: `enhancements/rbf_collocation_cv.py`
+
+```python
+def select_centers(samples: torch.Tensor, n_centers: int) -> torch.Tensor:
+    """Select RBF centers from samples via k-means or uniform subsampling.
+
+    Args:
+        samples: (N, d) all samples
+        n_centers: number of centers M_c
+    Returns:
+        centers: (M_c, d)
+    """
+    # Simple: random subset. Better: k-means clustering.
+    idx = torch.randperm(samples.shape[0])[:n_centers]
+    return samples[idx].detach().clone()
+
+
+def rbf_kernel(x: torch.Tensor, centers: torch.Tensor, ell: float) -> torch.Tensor:
+    """Gaussian RBF: phi(r) = exp(-r^2 / 2*ell^2).
+
+    Args:
+        x: (B, d) evaluation points
+        centers: (M_c, d) RBF centers
+        ell: bandwidth
+    Returns:
+        K: (B, M_c) kernel evaluations
+    """
+    # ||x_i - c_j||^2
+    diff = x.unsqueeze(1) - centers.unsqueeze(0)  # (B, M_c, d)
+    sq_dist = (diff ** 2).sum(dim=-1)              # (B, M_c)
+    return torch.exp(-sq_dist / (2 * ell ** 2))
+
+
+def build_collocation_matrix(
+    samples: torch.Tensor,
+    scores: torch.Tensor,
+    centers: torch.Tensor,
+    ell: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build the collocation matrix A and RHS b for the linear system.
+
+    For each basis function psi_{m,j} (RBF center m, output dim j):
+        [A_p psi_{m,j}](x) = s_j(x) * phi(||x - c_m||) + d/dx_j[phi(||x - c_m||)]
+
+    The differentiated PDE gives:
+        d/dx_l [A_p psi_{m,j}](x_i) = column of the collocation matrix
+
+    All derivatives of Gaussian RBFs are computed analytically.
+
+    Args:
+        samples: (N, d) collocation points
+        scores: (N, d) score values s_p(x_i)
+        centers: (M_c, d) RBF centers
+        ell: RBF bandwidth
+    Returns:
+        A: (N*d, M_c*d) collocation matrix
+        (Internal computation — see MATH_SPEC Section 7C.3)
+    """
+    # Implementation uses analytical Gaussian derivatives.
+    # phi(r) = exp(-r^2/(2*ell^2))
+    # d(phi)/dx_l = phi * (-(x_l - c_l)/ell^2)
+    # d^2(phi)/dx_l dx_k = phi * [(x_l-c_l)(x_k-c_k)/ell^4 - delta_{lk}/ell^2]
+    ...
+
+
+def rbf_collocation_cv(
+    samples: torch.Tensor,
+    scores: torch.Tensor,
+    f_values: torch.Tensor,
+    f_grad: torch.Tensor,
+    n_centers: int = 200,
+    ell: float = None,
+    reg_lambda: float = 1e-6,
+) -> dict:
+    """Solve the Stein CV via RBF collocation (single least-squares solve).
+
+    Args:
+        samples: (N, d) terminal samples
+        scores: (N, d) = s_p(x_i) = -grad_E(x_i)
+        f_values: (N,) function evaluations f(x_i)
+        f_grad: (N, d) gradient of f at each sample
+        n_centers: number of RBF centers (M_c)
+        ell: RBF bandwidth (None = median heuristic)
+        reg_lambda: Tikhonov regularization
+    Returns:
+        dict with 'estimate', 'variance_rbf', 'variance_naive',
+        'variance_reduction', 'coefficients'
+    """
+    N, d = samples.shape
+
+    # 1. Select centers
+    centers = select_centers(samples, n_centers)
+
+    # 2. Bandwidth
+    if ell is None:
+        from enhancements.stein_kernel import median_bandwidth
+        ell = median_bandwidth(samples).item()
+
+    # 3. Build collocation matrix A and RHS b
+    A, b = build_collocation_matrix(samples, scores, centers, ell)
+    # b = -f_grad.reshape(-1)  (the negative gradient of f, flattened)
+
+    # 4. Solve regularized least-squares: min ||A @ alpha - b||^2 + lambda * ||alpha||^2
+    # Normal equations: (A^T A + lambda I) alpha = A^T b
+    M = n_centers * d
+    AtA = A.T @ A + reg_lambda * torch.eye(M, device=samples.device)
+    Atb = A.T @ b
+    alpha = torch.linalg.solve(AtA, Atb)  # (M,)
+
+    # 5. Compute h(x_i) = f(x_i) + A_p g(x_i) using the solved coefficients
+    # Evaluate g at each sample, compute Stein operator, add to f
+    h_values = compute_h_from_coefficients(samples, scores, centers, ell, alpha, f_values)
+
+    estimate = h_values.mean().item()
+    naive_estimate = f_values.mean().item()
+
+    return {
+        'estimate': estimate,
+        'naive_estimate': naive_estimate,
+        'variance_rbf': h_values.var().item() / N,
+        'variance_naive': f_values.var().item() / N,
+        'variance_reduction': h_values.var().item() / (f_values.var().item() + 1e-20),
+        'coefficients': alpha,
+    }
+```
+
+### 13.3 Analytical Derivatives of Gaussian RBFs
+
+For $\varphi(x, c) = \exp(-\|x-c\|^2 / 2\ell^2)$, define $\delta = x - c$:
+
+$$\frac{\partial \varphi}{\partial x_l} = -\frac{\delta_l}{\ell^2} \varphi$$
+
+$$\frac{\partial^2 \varphi}{\partial x_l \partial x_k} = \left(\frac{\delta_l \delta_k}{\ell^4} - \frac{\delta_{lk}}{\ell^2}\right) \varphi$$
+
+The Stein operator on basis function $\psi_{m,j}$ (center $m$, output dim $j$):
+
+$$\mathcal{A}_p \psi_{m,j}(x) = s_j(x) \cdot \varphi_m(x) + \frac{\partial \varphi_m}{\partial x_j}(x)$$
+
+Its gradient w.r.t. $x_l$:
+
+$$\frac{\partial}{\partial x_l}[\mathcal{A}_p \psi_{m,j}](x) = \frac{\partial s_j}{\partial x_l} \cdot \varphi_m + s_j \cdot \frac{\partial \varphi_m}{\partial x_l} + \frac{\partial^2 \varphi_m}{\partial x_l \partial x_j}$$
+
+The first term requires the **Hessian of the energy** $\frac{\partial s_j}{\partial x_l} = -\frac{\partial^2 E}{\partial x_l \partial x_j}$. This can be computed via autograd (one Hessian-vector product per collocation dimension) or analytically for simple energies (Double Well has closed-form Hessian).
+
+### 13.4 Integration with Evaluation Pipeline
+
+Add as method #9 in the evaluation pipeline:
+- Report `rbf_cv_estimate`, `rbf_cv_var`, `rbf_cv_var_reduction`
+- Compare with RKHS Stein CV (same kernel family, different solving approach) and Neural CV
+
+### 13.5 Key Implementation Notes
+
+1. **Center selection:** Random subsampling works but k-means gives better coverage. Use `n_centers = min(200, N//2)`.
+2. **Bandwidth:** Use the same median heuristic as RKHS Stein CV for fair comparison.
+3. **Regularization:** Tikhonov regularization `lambda * ||alpha||^2` prevents ill-conditioning. Start with 1e-6.
+4. **Energy Hessian:** Required for building the collocation matrix. Use `torch.autograd.functional.hessian()` or Hessian-vector products. For DoubleWellEnergy, the Hessian is cheap (pairwise terms). For LennardJonesEnergy, use autograd.
+5. **Scaling limit:** Practical for d ≤ 50 (DW4 and LJ13). For LJ55 (d=165), the basis size M = 200 × 165 = 33,000 makes the matrix too large. Fall back to Neural CV.
+6. **No training loop:** This is the key advantage. One matrix solve ≈ milliseconds for DW4, seconds for LJ13.
+7. **Comparison with RKHS:** Both use Gaussian kernels, but:
+   - RKHS solves the *original* Stein equation with unknown constant (normalized CF estimator)
+   - RBF collocation solves the *differentiated* PDE (no unknown constant)
+   - This should avoid the large bias seen in RKHS Stein CV on DW4

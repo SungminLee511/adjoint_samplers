@@ -58,12 +58,43 @@ def main(cfg: DictConfig):
         gt_mean_energy = ref_E.mean().item()
         print(f"Ground truth mean energy: {gt_mean_energy:.6f}")
 
+    # --- Detect particle structure for EGNN ---
+    n_particles = cfg.get('n_particles', None)
+    spatial_dim = cfg.get('spatial_dim', None)
+    # Try to infer from config if not set directly
+    if n_particles is None and hasattr(cfg, 'controller'):
+        n_particles = cfg.controller.get('n_particles', None)
+        spatial_dim = cfg.controller.get('spatial_dim', None)
+    if n_particles is None and hasattr(cfg, 'energy'):
+        n_particles = cfg.energy.get('n_particles', None)
+        spatial_dim = cfg.energy.get('spatial_dim', None)
+    if n_particles is not None:
+        print(f"Particle structure: {n_particles} particles × {spatial_dim}D")
+
     # --- Main evaluation ---
     print("\n========== MAIN EVALUATION ==========")
     eval_config = EvalConfig(
         n_seeds=10,
-        sample_sizes=[100, 500, 1000, 2000],
-        max_stein_samples=2000,
+        sample_sizes=[500, 1000, 2000, 5000],
+        max_stein_samples=5000,
+        # Neural CV (MLP) — big model, long training
+        neural_cv_epochs=2000,
+        neural_cv_hidden_dim=512,
+        neural_cv_n_layers=5,
+        neural_cv_batch_size=512,
+        neural_cv_lr=5e-4,
+        # EGNN CV — big model, long training
+        egnn_cv_epochs=2000,
+        egnn_cv_hidden_nf=128,
+        egnn_cv_n_layers=6,
+        egnn_cv_batch_size=512,
+        egnn_cv_lr=5e-4,
+        # RBF Collocation
+        rbf_n_centers=500,
+        rbf_reg_lambda=1e-6,
+        # Particle structure
+        n_particles=n_particles,
+        spatial_dim=spatial_dim,
     )
     results = full_evaluation(
         sde, source, energy, timesteps, device,
@@ -78,14 +109,15 @@ def main(cfg: DictConfig):
     # --- MCMC ablation ---
     print("\n========== MCMC ABLATION ==========")
     mcmc_results = {}
-    for K in [0, 5, 10, 20, 50]:
+    for K in [0, 5, 10, 20, 50, 100]:
         torch.manual_seed(0)
         run = single_run_evaluation(
             sde, source, energy, timesteps,
-            n_samples=2000, mh_steps=K,
+            n_samples=5000, mh_steps=K,
             stein_reg_lambda=1e-4,
             device=device,
             gt_mean_energy=gt_mean_energy,
+            config=eval_config,
         )
         mcmc_results[K] = run
         err_mcmc = run.get('error_mcmc', float('nan'))
@@ -128,6 +160,8 @@ def main(cfg: DictConfig):
         ('MCMC+Stein',    'hybrid_estimate',   'error_hybrid','hybrid_var',    None),
         ('Gen Stein CV',  'gen_stein_estimate','error_gen_stein','gen_stein_var', None),
         ('Neural CV',     'neural_cv_estimate','error_neural_cv','neural_cv_var','neural_cv_var_reduction'),
+        ('EGNN CV',       'egnn_cv_estimate',  'error_egnn_cv','egnn_cv_var',  'egnn_cv_var_reduction'),
+        ('RBF Colloc CV', 'rbf_cv_estimate',   'error_rbf_cv', 'rbf_cv_var',  'rbf_cv_var_reduction'),
     ]
 
     for label, est_key, err_key, var_key, vr_key in rows:

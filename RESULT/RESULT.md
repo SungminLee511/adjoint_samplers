@@ -59,6 +59,12 @@ We train Adjoint Sampling with Bridge Splitting (ASBS) to sample from Boltzmann 
 | 5 | **MCMC + Stein CV** | MCMC first, then RKHS Stein CV | $O(KN + N^3)$ | ✓✓ | ✓ |
 | 6 | **Generator Stein CV** | Uses learned drift $b_\theta(x,1)$ instead of $s_p(x)$ | $O(N^3)$ | ✓ (coupling) | ✓ |
 | 7 | **Neural Stein CV** | MLP $g_\phi$ trained on PDE loss $\|\nabla_x h\|^2$ | $O(BdT)$ | ✓ (coupling) | ✓ |
+| 8 | **EGNN Stein CV** | Equivariant $g_\phi$ (same arch as ASBS controller) on PDE loss | $O(Bn^2LT)$ | ✓ (coupling) | ✓ |
+| 9 | **RBF Collocation CV** | Expand $g$ in Gaussian RBF basis, single least-squares solve | $O(NdM + M^3)$ | ✓ (differentiated PDE) | ✓ |
+
+**Methods 8–9 are new advances** addressing the instability of Neural Stein CV (method 7):
+- **EGNN Stein CV** exploits the particle structure and E(3) symmetry of molecular systems. The MLP ignores that DW4/LJ are particle systems — EGNN enforces equivariance by construction, constraining $g_\phi$ to physically meaningful vector fields.
+- **RBF Collocation CV** avoids neural network training entirely. By expanding $g$ in a Gaussian RBF basis, the differentiated PDE becomes a **linear least-squares** problem — one matrix solve, no epochs, no gradient instability. Uses the same differentiated PDE form as Neural CV (eliminates unknown $c$) but with deterministic, non-iterative solving.
 
 **Bias-Variance Coupling Theorem (v2):**
 $$|\text{Bias}| \leq \sqrt{C \cdot \text{Var}_{q_\theta}[f + \mathcal{A}_p g]}$$
@@ -103,6 +109,8 @@ Computed from 10,000 reference samples drawn from the true Boltzmann distributio
 | MCMC + Stein CV | -24.8511 | 2.4007 | 1.31e-03 | — |
 | Generator Stein CV | -22.3936 | 0.0680 | 4.73e-03 | — |
 | Neural Stein CV | -21.8515 | 0.7469 | 5.91e-01 | 308.925 |
+| **EGNN Stein CV** | -21.8416 | 0.7518 | 6.01e-01 | 314.051 |
+| **RBF Collocation CV** | -22.4943 | 0.1023 | 1.66e-01 | 86.479 |
 
 ### 4.3 Diagnostics
 
@@ -324,6 +332,8 @@ Hutchinson divergence estimator is used for Neural CV here (exact divergence wou
 | Stein CV (RKHS) | 0.759 | `___` | `___` |
 | Antithetic | 0.696 | `___` | `___` |
 | Neural Stein CV | 308.925 | `___` | `___` |
+| EGNN Stein CV | 314.051 | `___` | `___` |
+| RBF Collocation CV | 86.479 | `___` | `___` |
 
 #### Cross-System Variance Reduction Plot
 <!-- ![Cross-System VarRed](cross_system_var_reduction.png) -->
@@ -338,6 +348,8 @@ Hutchinson divergence estimator is used for Neural CV here (exact divergence wou
 | MCMC (K=10) | 0.0467 | `___` | `___` |
 | MCMC + Stein CV | 2.4007 | `___` | `___` |
 | Neural Stein CV | 0.7469 | `___` | `___` |
+| EGNN Stein CV | 0.7518 | `___` | `___` |
+| RBF Collocation CV | 0.1023 | `___` | `___` |
 
 #### Cross-System Error Plot
 <!-- ![Cross-System Error](cross_system_error.png) -->

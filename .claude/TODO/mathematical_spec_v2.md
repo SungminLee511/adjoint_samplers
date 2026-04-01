@@ -665,6 +665,117 @@ No $N \times N$ matrices. Training scales linearly in $N$ (via mini-batching). T
 
 -----
 
+## 7B. Enhancement 7B: Equivariant Neural Stein CV (EGNN Architecture)
+
+### 7B.1 Motivation
+
+The MLP architecture for $g_\phi$ in Section 7 treats the input $x \in \mathbb{R}^d$ as a flat vector, ignoring that molecular systems have **particle structure** and **spatial symmetries**. For DW4 (4 particles × 2D) and LJ13/LJ55 (particles × 3D), the energy $E(x)$ is invariant under E(3) transformations (rotations, translations, reflections) of the particle coordinates. The optimal Stein CV solution $g^*$ inherits this symmetry — it is **equivariant**: if we rotate all particles, $g^*$ rotates accordingly.
+
+An MLP must *learn* this symmetry from data, wasting capacity. An equivariant architecture *enforces* it by construction.
+
+### 7B.2 Architecture: EGNN as Stein CV Backbone
+
+We replace the MLP $g_\phi: \mathbb{R}^d \to \mathbb{R}^d$ with an EGNN (E(n) Equivariant Graph Neural Network), the same architecture used for the ASBS controller $u_\theta$. The EGNN operates on particle coordinates directly:
+
+1. **Input:** $x \in \mathbb{R}^{n_{\text{particles}} \times d_{\text{spatial}}}$ (reshaped from flat vector)
+2. **Graph construction:** Fully-connected graph over particles, edge features from pairwise distances $\|x_i - x_j\|^2$
+3. **Message passing:** $L$ layers of equivariant graph convolutions (E_GCL), each updating both node features $h_i$ and coordinates $x_i$
+4. **Output:** Coordinate displacement $g_\phi(x) = x_{\text{out}} - x_{\text{in}} \in \mathbb{R}^{n_{\text{particles}} \times d_{\text{spatial}}}$, flattened back to $\mathbb{R}^d$
+5. **Mean removal:** $g_\phi(x) \leftarrow g_\phi(x) - \text{mean}(g_\phi(x))$ to respect COM constraint
+
+**Key properties preserved:**
+- **Translation equivariance:** Shifting all particles shifts $g_\phi$ identically
+- **Rotation equivariance:** Rotating all particles rotates $g_\phi$ identically
+- **Permutation equivariance:** Reordering particles reorders $g_\phi$ identically
+
+### 7B.3 Stein Operator with EGNN
+
+The Stein operator $\mathcal{A}_p g = s_p(x)^T g(x) + \text{div}(g)(x)$ is computed identically to Section 7.4–7.6. The only difference is that $g_\phi$ is now an EGNN forward pass instead of an MLP forward pass. The divergence computation (exact or Hutchinson) works the same way through autograd — PyTorch does not care about the internal architecture.
+
+**Computational cost change:** EGNN forward pass is $O(n_{\text{particles}}^2 \cdot L \cdot h)$ per sample (all-pairs message passing with $L$ layers and hidden dim $h$), compared to $O(d \cdot h_{\text{MLP}} \cdot L_{\text{MLP}})$ for MLP. For small particle counts (DW4: 4 particles), EGNN may be cheaper. For large counts (LJ55: 55 particles, 2970 edges), EGNN is more expensive per forward pass but should converge in far fewer epochs due to the symmetry prior.
+
+### 7B.4 Expected Benefits
+
+1. **Faster convergence:** The symmetry prior dramatically reduces the function space $g_\phi$ must search over. Fewer epochs needed.
+2. **Better generalization:** Equivariant $g_\phi$ cannot produce symmetry-breaking artifacts that waste capacity on impossible solutions.
+3. **Consistency with ASBS:** The controller $u_\theta$ is already an EGNN. Using the same architecture for $g_\phi$ ensures the Stein CV operates in the same function class as the model it's correcting.
+
+-----
+
+## 7C. Enhancement 7C: RBF Collocation Stein CV (Classical PDE Solver)
+
+### 7C.1 Motivation
+
+The Neural Stein CV (Section 7) solves the differentiated Poisson equation via iterative gradient descent on a neural network. This is expensive (hundreds of epochs, 3rd-order autograd) and can be unstable (as observed on DW4 where Neural CV variance exploded 309×).
+
+The key insight: when $g$ is represented in a **linear basis**, the PDE loss becomes a **linear least-squares problem** — solvable in a single matrix factorization with no iterative optimization.
+
+### 7C.2 Basis Expansion
+
+Represent $g: \mathbb{R}^d \to \mathbb{R}^d$ as a linear combination of $M$ basis functions:
+
+$$g(x) = \sum_{k=1}^{M} \alpha_k \psi_k(x)$$
+
+where $\psi_k: \mathbb{R}^d \to \mathbb{R}^d$ are vector-valued basis functions and $\alpha_k \in \mathbb{R}$ are scalar coefficients. In practice, we use **component-wise RBF basis**: for each output dimension $j$ and each center $c_m$ (chosen from a subset of samples), define:
+
+$$[\psi_{m,j}(x)]_l = \delta_{jl} \cdot \varphi(\|x - c_m\|)$$
+
+where $\varphi(r) = \exp(-r^2 / 2\ell^2)$ is a Gaussian RBF with bandwidth $\ell$ (median heuristic). This gives $M = M_c \times d$ basis functions for $M_c$ centers.
+
+### 7C.3 The Linear System
+
+The Stein operator applied to a single basis function is:
+
+$$\mathcal{A}_p \psi_k(x) = s_p(x)^T \psi_k(x) + \text{div}(\psi_k)(x)$$
+
+which is computable analytically for RBF basis (derivatives of Gaussians are known in closed form). The PDE residual at collocation point $x_i$ is:
+
+$$r_i(\alpha) = \nabla_{x_i} f(x_i) + \sum_k \alpha_k \nabla_{x_i} [\mathcal{A}_p \psi_k](x_i)$$
+
+Define the matrix $\mathbf{A} \in \mathbb{R}^{(N \cdot d) \times M}$ with entries:
+
+$$A_{(i,j), k} = \frac{\partial}{\partial x_{i,j}} [\mathcal{A}_p \psi_k](x_i)$$
+
+and the right-hand side $\mathbf{b} \in \mathbb{R}^{N \cdot d}$ with entries $b_{(i,j)} = -\frac{\partial f}{\partial x_{i,j}}(x_i)$.
+
+The optimal coefficients solve the linear least-squares problem:
+
+$$\alpha^* = \arg\min_\alpha \|\mathbf{A}\alpha - \mathbf{b}\|^2$$
+
+$$\alpha^* = (\mathbf{A}^T \mathbf{A})^{-1} \mathbf{A}^T \mathbf{b}$$
+
+This is a **single matrix solve** — no epochs, no learning rate, no gradient clipping.
+
+### 7C.4 Computational Cost
+
+- **Matrix assembly:** $O(N \cdot M \cdot d)$ — evaluate basis derivatives at all collocation points
+- **Solve:** $O(M^2 \cdot N \cdot d + M^3)$ — normal equations or QR factorization
+- **Memory:** $O(N \cdot d \cdot M)$ for the collocation matrix
+
+For $M_c = 200$ centers in $d = 8$ (DW4): $M = 1600$ basis functions. The matrix $\mathbf{A}$ is $(2000 \times 8) \times 1600 = 16000 \times 1600$. This is a modest least-squares problem.
+
+For $d = 165$ (LJ55): $M = 200 \times 165 = 33000$ basis functions. The matrix becomes very large. **RBF collocation is best suited for low-to-medium dimensions** (DW4, LJ13), complementing the Neural CV which excels in high dimensions.
+
+### 7C.5 Advantages over Neural and RKHS
+
+| Property | RKHS Stein CV | Neural Stein CV | RBF Collocation |
+|----------|---------------|-----------------|-----------------|
+| Solve type | Kernel ridge regression | Iterative SGD | Single least-squares |
+| Matrix size | $N \times N$ | None (mini-batch) | $(Nd) \times M$ |
+| Iterations | 1 (matrix solve) | 500–2000 epochs | 1 (matrix solve) |
+| Stability | Can over-regularize | Can diverge (3rd-order grad) | Stable (linear LS) |
+| PDE form | Original ($f + \mathcal{A}_p g = c$) | Differentiated ($\nabla h = 0$) | Differentiated ($\nabla h = 0$) |
+| Unknown constant $c$ | Handled via normalized CF | Eliminated by differentiation | Eliminated by differentiation |
+| Best dimension range | $d \leq 20$ | $d \geq 30$ | $d \leq 50$ |
+
+### 7C.6 When to Use
+
+- **DW4 (8D):** RBF collocation is ideal — small $d$, closed-form derivatives, no training instability.
+- **LJ13 (39D):** Feasible with $M_c \approx 100$–200 centers. May outperform both RKHS (kernel degradation) and Neural (training instability).
+- **LJ55 (165D):** Too many basis functions. Use Neural Stein CV instead.
+
+-----
+
 ## 8. Experimental Design
 
 ### 8.1 Benchmarks
