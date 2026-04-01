@@ -79,66 +79,71 @@ Optimizing $g$ for variance reduction *automatically* shrinks the bias. This mea
 | Source | Harmonic (scale=2) |
 | Checkpoint | `results/local/2026.03.31/152919/checkpoints/checkpoint_latest.pt` |
 
-### 4.2 Summary Table (N = 2000, 10 seeds)
+### 4.1.1 Ground Truth
 
-<!-- TEMPLATE — fill after running eval -->
+Computed from 10,000 reference samples drawn from the true Boltzmann distribution $p \propto e^{-E(x)}$ (`data/test_split_DW4.npy`), evaluated through `DoubleWellEnergy.eval()`:
+
+| Statistic | Value |
+|-----------|-------|
+| **Mean** | **-22.4504** |
+| Std | 1.9015 |
+| Median | -22.7987 |
+| [5th, 95th] %ile | [-24.9067, -18.8260] |
+| [Min, Max] | [-25.7486, -11.8381] |
+
+### 4.2 Summary Table (N = 2000, 10 seeds)
 
 | Method | Mean Energy | |Error| | Variance | Var Ratio |
 |--------|-------------|--------|----------|-----------|
-| **Ground Truth** | `___` | 0 | — | — |
-| Vanilla ASBS | `___` ± `___` | `___` | `___` | 1.000 |
-| Stein CV (RKHS) | `___` ± `___` | `___` | `___` | `___` |
-| Antithetic | `___` ± `___` | `___` | `___` | `___` |
-| MCMC (K=10) | `___` ± `___` | `___` | `___` | — |
-| MCMC + Stein CV | `___` ± `___` | `___` | `___` | — |
-| Generator Stein CV | `___` ± `___` | `___` | `___` | — |
-| Neural Stein CV | `___` ± `___` | `___` | `___` | `___` |
+| **Ground Truth** | -22.4504 | 0 | — | — |
+| Vanilla ASBS | -22.4093 | 0.0456 | 1.92e-03 | 1.000 |
+| Stein CV (RKHS) | -25.0794 | 2.6290 | 1.45e-03 | 0.759 |
+| Antithetic | -22.4102 | 0.0676 | 2.71e-03 | 0.696 |
+| MCMC (K=10) | -22.4084 | 0.0467 | 1.92e-03 | — |
+| MCMC + Stein CV | -24.8511 | 2.4007 | 1.31e-03 | — |
+| Generator Stein CV | -22.3936 | 0.0680 | 4.73e-03 | — |
+| Neural Stein CV | -21.8515 | 0.7469 | 5.91e-01 | 308.925 |
 
 ### 4.3 Diagnostics
 
 | Metric | Value |
 |--------|-------|
-| KSD² | `___` ± `___` |
-| MH Acceptance Rate | `___` |
-| Antithetic Correlation | `___` |
+| KSD² | 0.0201 ± 0.0118 |
+| MH Acceptance Rate | 0.0041 |
+| Antithetic Correlation | 0.3836 |
 
 ### 4.4 Plots
 
 #### Estimation Error vs Sample Size
-<!-- ![DW4 Error vs N](dw4_error_vs_N.png) -->
-`[PENDING: dw4_error_vs_N.png]`
+![DW4 Error vs N](dw4_error_vs_N.png)
 
 #### Estimator Variance vs Sample Size
-<!-- ![DW4 Variance vs N](dw4_variance_vs_N.png) -->
-`[PENDING: dw4_variance_vs_N.png]`
+![DW4 Variance vs N](dw4_variance_vs_N.png)
 
 #### Variance Reduction Factors
-<!-- ![DW4 Var Reduction](dw4_variance_reduction_bars.png) -->
-`[PENDING: dw4_variance_reduction_bars.png]`
+![DW4 Var Reduction](dw4_variance_reduction_bars.png)
 
 #### KSD² vs Sample Size
-<!-- ![DW4 KSD](dw4_ksd_vs_N.png) -->
-`[PENDING: dw4_ksd_vs_N.png]`
+![DW4 KSD](dw4_ksd_vs_N.png)
 
 #### Antithetic Correlation vs Sample Size
-<!-- ![DW4 Antithetic](dw4_antithetic_correlation.png) -->
-`[PENDING: dw4_antithetic_correlation.png]`
+![DW4 Antithetic](dw4_antithetic_correlation.png)
 
 #### MCMC Ablation (K = 0, 5, 10, 20, 50)
-<!-- ![DW4 MCMC Ablation](dw4_mcmc_ablation.png) -->
-`[PENDING: dw4_mcmc_ablation.png]`
+![DW4 MCMC Ablation](dw4_mcmc_ablation.png)
 
 #### Summary Table (Image)
-<!-- ![DW4 Summary](dw4_summary_table.png) -->
-`[PENDING: dw4_summary_table.png]`
+![DW4 Summary](dw4_summary_table.png)
 
 ### 4.5 DW4 Observations
 
-<!-- TEMPLATE — fill after eval -->
-- *Expected:* All 7 methods should work well in 8D. RKHS kernel is well-conditioned.
-- *Variance reduction:* `___`
-- *Bias reduction:* `___`
-- *Antithetic effectiveness:* `___`
+- **Vanilla ASBS is already excellent:** Error of only 0.046 — the learned sampler is very close to the target in 8D.
+- **Stein CV (RKHS) hurts estimation:** The kernel ridge regression introduces large bias (error 2.63), overshooting the ground truth by ~2.6 units. Variance is slightly reduced (0.759×) but the bias penalty far outweighs it. The normalized CF estimator appears to over-correct in this regime.
+- **Neural Stein CV is unstable:** Variance explodes (309× worse). The PDE loss optimization is not converging well enough on DW4 — possibly because the vanilla estimate is already so accurate that there is little signal for the neural net to learn from.
+- **MCMC is ineffective:** Acceptance rate of 0.4% means MH proposals are almost always rejected. The step size is too large for this distribution's geometry. MCMC estimate is essentially unchanged from vanilla.
+- **Antithetic gives mild variance reduction** (0.696×) but the positive correlation (0.384) indicates the paired trajectories are not well anti-correlated — the drift dominates insufficiently over diffusion in DW4.
+- **Generator Stein CV** performs similarly to vanilla (error 0.068), suggesting the learned drift doesn't add useful Stein operator information beyond what the score provides.
+- **Key insight:** When the base sampler is already accurate (error < 0.05), post-hoc enhancements struggle to improve further and can actively harm the estimate. The enhancements may show their value more clearly on harder problems (LJ13, LJ55) where vanilla ASBS has larger bias.
 
 ---
 
@@ -316,9 +321,9 @@ Hutchinson divergence estimator is used for Neural CV here (exact divergence wou
 
 | Method | DW4 (8D) | LJ13 (39D) | LJ55 (165D) |
 |--------|----------|-------------|--------------|
-| Stein CV (RKHS) | `___` | `___` | `___` |
-| Antithetic | `___` | `___` | `___` |
-| Neural Stein CV | `___` | `___` | `___` |
+| Stein CV (RKHS) | 0.759 | `___` | `___` |
+| Antithetic | 0.696 | `___` | `___` |
+| Neural Stein CV | 308.925 | `___` | `___` |
 
 #### Cross-System Variance Reduction Plot
 <!-- ![Cross-System VarRed](cross_system_var_reduction.png) -->
@@ -328,11 +333,11 @@ Hutchinson divergence estimator is used for Neural CV here (exact divergence wou
 
 | Method | DW4 (8D) | LJ13 (39D) | LJ55 (165D) |
 |--------|----------|-------------|--------------|
-| Vanilla ASBS | `___` | `___` | `___` |
-| Stein CV (RKHS) | `___` | `___` | `___` |
-| MCMC (K=10) | `___` | `___` | `___` |
-| MCMC + Stein CV | `___` | `___` | `___` |
-| Neural Stein CV | `___` | `___` | `___` |
+| Vanilla ASBS | 0.0456 | `___` | `___` |
+| Stein CV (RKHS) | 2.6290 | `___` | `___` |
+| MCMC (K=10) | 0.0467 | `___` | `___` |
+| MCMC + Stein CV | 2.4007 | `___` | `___` |
+| Neural Stein CV | 0.7469 | `___` | `___` |
 
 #### Cross-System Error Plot
 <!-- ![Cross-System Error](cross_system_error.png) -->
@@ -349,7 +354,7 @@ Plot: x-axis = dimension (8, 39, 165), y-axis = variance reduction factor, two l
 
 | System | KSD² (mean ± std) | Interpretation |
 |--------|-------------------|----------------|
-| DW4 | `___` | `___` |
+| DW4 | 0.0201 ± 0.0118 | Low KSD — sampler is close to target |
 | LJ13 | `___` | `___` |
 | LJ55 | `___` | `___` |
 
@@ -375,11 +380,11 @@ Effect of MH correction steps K on estimation error (N = 2000):
 
 | K | DW4 Error (MCMC) | DW4 Error (Hybrid) | LJ13 Error (MCMC) | LJ13 Error (Hybrid) | LJ55 Error (MCMC) | LJ55 Error (Hybrid) |
 |---|------------------|--------------------|--------------------|----------------------|--------------------|----------------------|
-| 0 | `___` | `___` | `___` | `___` | `___` | `___` |
-| 5 | `___` | `___` | `___` | `___` | `___` | `___` |
-| 10 | `___` | `___` | `___` | `___` | `___` | `___` |
-| 20 | `___` | `___` | `___` | `___` | `___` | `___` |
-| 50 | `___` | `___` | `___` | `___` | `___` | `___` |
+| 0 | 0.0842 | `___` | `___` | `___` | `___` | `___` |
+| 5 | 0.0833 | `___` | `___` | `___` | `___` | `___` |
+| 10 | 0.0826 | `___` | `___` | `___` | `___` | `___` |
+| 20 | 0.0750 | `___` | `___` | `___` | `___` | `___` |
+| 50 | 0.0587 | `___` | `___` | `___` | `___` | `___` |
 
 ### 8.2 Stein Regularization λ Ablation
 
