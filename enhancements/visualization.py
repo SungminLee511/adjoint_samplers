@@ -33,15 +33,17 @@ COLORS = {
     'mcmc': '#d62728',
     'hybrid': '#9467bd',
     'gen_stein': '#8c564b',
+    'neural_cv': '#e377c2',
 }
 
 LABELS = {
     'naive': 'Vanilla ASBS',
-    'stein_cv': 'Stein CV',
+    'stein_cv': 'Stein CV (RKHS)',
     'antithetic': 'Antithetic',
     'mcmc': 'MCMC Corrected',
     'hybrid': 'MCMC + Stein CV',
     'gen_stein': 'Generator Stein CV',
+    'neural_cv': 'Neural Stein CV',
 }
 
 
@@ -63,6 +65,7 @@ def plot_estimation_error_vs_samples(
         ('error_mcmc', 'mcmc'),
         ('error_hybrid', 'hybrid'),
         ('error_gen_stein', 'gen_stein'),
+        ('error_neural_cv', 'neural_cv'),
     ]
 
     for metric_key, method_key in methods:
@@ -111,6 +114,7 @@ def plot_variance_comparison(
         ('mcmc_var', 'mcmc'),
         ('hybrid_var', 'hybrid'),
         ('gen_stein_var', 'gen_stein'),
+        ('neural_cv_var', 'neural_cv'),
     ]
 
     for var_key, method_key in variance_methods:
@@ -157,8 +161,9 @@ def plot_variance_reduction_factors(
     N = sample_sizes[-1]  # Use largest N
 
     methods = [
-        ('stein_var_reduction', 'Stein CV'),
+        ('stein_var_reduction', 'Stein CV (RKHS)'),
         ('anti_var_reduction', 'Antithetic'),
+        ('neural_cv_var_reduction', 'Neural Stein CV'),
     ]
 
     # Also compute hybrid / naive ratio
@@ -169,7 +174,7 @@ def plot_variance_reduction_factors(
         )
         methods.append(('_hybrid_ratio', 'MCMC + Stein CV'))
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(8, 4))
 
     names = []
     means = []
@@ -185,7 +190,7 @@ def plot_variance_reduction_factors(
             means.append(results[N][key]['mean'])
             stds.append(results[N][key]['std'])
 
-    colors = ['#ff7f0e', '#2ca02c', '#9467bd'][:len(names)]
+    colors = ['#ff7f0e', '#2ca02c', '#e377c2', '#9467bd'][:len(names)]
     bars = ax.bar(names, means, yerr=stds, color=colors,
                   capsize=5, edgecolor='black', linewidth=0.5)
 
@@ -341,7 +346,7 @@ def plot_summary_table(
     rows = [
         ['Vanilla ASBS', fmt_mean_std('naive_mean_energy'),
          fmt_val('naive_var'), fmt_err('error_naive'), "1.000"],
-        ['Stein CV', fmt_mean_std('stein_cv_estimate'),
+        ['Stein CV (RKHS)', fmt_mean_std('stein_cv_estimate'),
          fmt_val('stein_cv_var'), fmt_err('error_stein'),
          fmt_val('stein_var_reduction', '.3f')],
         ['Antithetic', fmt_mean_std('anti_estimate'),
@@ -353,6 +358,9 @@ def plot_summary_table(
          fmt_val('hybrid_var'), fmt_err('error_hybrid'), "---"],
         ['Generator Stein CV', fmt_mean_std('gen_stein_estimate'),
          fmt_val('gen_stein_var'), fmt_err('error_gen_stein'), "---"],
+        ['Neural Stein CV', fmt_mean_std('neural_cv_estimate'),
+         fmt_val('neural_cv_var'), fmt_err('error_neural_cv'),
+         fmt_val('neural_cv_var_reduction', '.3f')],
     ]
 
     if gt_mean_energy is not None:

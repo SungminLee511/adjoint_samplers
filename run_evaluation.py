@@ -127,6 +127,7 @@ def main(cfg: DictConfig):
         ('MCMC',          'mcmc_mean_energy',  'error_mcmc',  'mcmc_var',      None),
         ('MCMC+Stein',    'hybrid_estimate',   'error_hybrid','hybrid_var',    None),
         ('Gen Stein CV',  'gen_stein_estimate','error_gen_stein','gen_stein_var', None),
+        ('Neural CV',     'neural_cv_estimate','error_neural_cv','neural_cv_var','neural_cv_var_reduction'),
     ]
 
     for label, est_key, err_key, var_key, vr_key in rows:

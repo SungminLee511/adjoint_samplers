@@ -20,6 +20,7 @@ from enhancements.enhanced_evaluator import evaluate_enhanced
 from enhancements.antithetic import sdeint_antithetic, antithetic_estimate
 from enhancements.stein_kernel import compute_ksd
 from enhancements.generator_stein import generator_stein_cv_estimate
+from enhancements.neural_stein_cv import NeuralSteinCV, train_neural_stein_cv
 
 
 @hydra.main(config_path="configs", config_name="train.yaml", version_base="1.1")
@@ -102,6 +103,29 @@ def main(cfg: DictConfig):
     for k, v in sorted(gen_results.items()):
         print(f"  {k}: {v:.6f}")
 
+    # --- Neural Stein CV ---
+    print("\n=== Neural Stein CV ===")
+    D = samples.shape[1]
+    neural_epochs = 500 if D <= 40 else 1000
+    hutch = 0 if D <= 20 else 1
+    g_model = NeuralSteinCV(
+        dim=D, hidden_dim=min(256, max(64, D * 2)), n_layers=3,
+    ).to(samples.device)
+    neural_result = train_neural_stein_cv(
+        g_model,
+        samples,
+        energy,
+        f_func=lambda x: energy.eval(x),
+        n_epochs=neural_epochs,
+        batch_size=min(256, N),
+        lr=1e-3,
+        hutchinson_samples=hutch,
+    )
+    print(f"  estimate: {neural_result['estimate']:.6f}")
+    print(f"  naive_estimate: {neural_result['naive_estimate']:.6f}")
+    print(f"  variance_neural: {neural_result['variance_neural']:.6f}")
+    print(f"  variance_reduction: {neural_result['variance_reduction']:.6f}")
+
     # --- Summary ---
     print("\n=== SUMMARY ===")
     if ref_energies is not None:
@@ -113,6 +137,7 @@ def main(cfg: DictConfig):
         print(f"  MCMC + Stein CV:          {results.get('hybrid_energy_estimate', 'N/A')}  (error: {results.get('error_hybrid', 'N/A')})")
         print(f"  Antithetic:               {anti_results['estimate']:.6f}")
         print(f"  Generator Stein CV:       {gen_results['estimate']:.6f}")
+        print(f"  Neural Stein CV:          {neural_result['estimate']:.6f}")
     print(f"\n  KSD^2:                    {results['ksd_squared']:.6f}")
     print(f"  MH acceptance rate:       {results['mh_acceptance_rate']:.4f}")
     print(f"  Antithetic correlation:   {anti_results['correlation']:.4f}")

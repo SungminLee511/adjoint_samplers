@@ -25,6 +25,7 @@ from enhancements.stein_cv import stein_cv_estimate, multi_function_stein_cv
 from enhancements.antithetic import sdeint_antithetic, antithetic_estimate
 from enhancements.mcmc_correction import mh_correct
 from enhancements.generator_stein import generator_stein_cv_estimate
+from enhancements.neural_stein_cv import NeuralSteinCV, train_neural_stein_cv
 
 
 @dataclass
@@ -167,7 +168,29 @@ def single_run_evaluation(
     results['gen_stein_estimate'] = gen['estimate']
     results['gen_stein_var'] = gen['variance_gen_stein']
 
-    # --- 8. Errors vs ground truth ---
+    # --- 8. Neural Stein CV ---
+    D = samples.shape[1]
+    neural_epochs = 500 if D <= 40 else 1000
+    hutch = 0 if D <= 20 else 1
+    g_model = NeuralSteinCV(
+        dim=D, hidden_dim=min(256, max(64, D * 2)), n_layers=3,
+    ).to(device)
+    neural_result = train_neural_stein_cv(
+        g_model,
+        samples,
+        energy,
+        f_func=lambda x: energy.eval(x),
+        n_epochs=neural_epochs,
+        batch_size=min(256, N),
+        lr=1e-3,
+        hutchinson_samples=hutch,
+        verbose=False,
+    )
+    results['neural_cv_estimate'] = neural_result['estimate']
+    results['neural_cv_var'] = neural_result['variance_neural']
+    results['neural_cv_var_reduction'] = neural_result['variance_reduction']
+
+    # --- 9. Errors vs ground truth ---
     if gt_mean_energy is not None:
         gt = gt_mean_energy
         results['error_naive'] = abs(results['naive_mean_energy'] - gt)
@@ -176,6 +199,7 @@ def single_run_evaluation(
         results['error_mcmc'] = abs(results['mcmc_mean_energy'] - gt)
         results['error_hybrid'] = abs(results['hybrid_estimate'] - gt)
         results['error_gen_stein'] = abs(results['gen_stein_estimate'] - gt)
+        results['error_neural_cv'] = abs(results['neural_cv_estimate'] - gt)
 
     return results
 
@@ -223,7 +247,8 @@ def full_evaluation(
             seed_results.append(run)
             print(f"  seed {seed}: naive={run['naive_mean_energy']:.4f}, "
                   f"stein={run['stein_cv_estimate']:.4f}, "
-                  f"hybrid={run['hybrid_estimate']:.4f}")
+                  f"hybrid={run['hybrid_estimate']:.4f}, "
+                  f"neural={run['neural_cv_estimate']:.4f}")
 
         # Aggregate across seeds
         all_keys = seed_results[0].keys()

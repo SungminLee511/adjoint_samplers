@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 from enhancements.stein_kernel import compute_ksd, median_bandwidth
 from enhancements.stein_cv import multi_function_stein_cv
 from enhancements.mcmc_correction import mh_correct
+from enhancements.neural_stein_cv import NeuralSteinCV, train_neural_stein_cv
 
 
 def evaluate_enhanced(
@@ -121,7 +122,29 @@ def evaluate_enhanced(
                 fres['variance_stein'] / fres['variance_naive']
             )
 
-    # --- 7. Ground truth comparison ---
+    # --- 7. Neural Stein CV ---
+    neural_epochs = 500 if D <= 40 else 1000
+    hutch = 0 if D <= 20 else 1  # exact div for low-d, Hutchinson for high-d
+    g_model = NeuralSteinCV(
+        dim=D, hidden_dim=min(256, max(64, D * 2)), n_layers=3,
+    ).to(device)
+    neural_result = train_neural_stein_cv(
+        g_model,
+        samples,
+        energy,
+        f_func=lambda x: energy.eval(x),
+        n_epochs=neural_epochs,
+        batch_size=min(256, N),
+        lr=1e-3,
+        hutchinson_samples=hutch,
+        verbose=False,
+    )
+    results['neural_cv_estimate'] = neural_result['estimate']
+    results['neural_cv_var'] = neural_result['variance_neural']
+    results['neural_cv_var_reduction'] = neural_result['variance_reduction']
+    results['neural_cv_final_loss'] = neural_result['losses'][-1]
+
+    # --- 8. Ground truth comparison ---
     if ref_energies is not None:
         gt_mean = ref_energies.mean().item()
         results['gt_mean_energy'] = gt_mean
@@ -129,5 +152,6 @@ def evaluate_enhanced(
         results['error_stein'] = abs(stein_results['energy']['estimate'] - gt_mean)
         results['error_mcmc'] = abs(results['mean_energy_mcmc'] - gt_mean)
         results['error_hybrid'] = abs(hybrid_results['energy']['estimate'] - gt_mean)
+        results['error_neural_cv'] = abs(neural_result['estimate'] - gt_mean)
 
     return results
