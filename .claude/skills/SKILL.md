@@ -31,18 +31,27 @@ adjoint_samplers/                    # ORIGINAL — DO NOT MODIFY
 
 enhancements/                        # NEW — all Stein enhancement code
     __init__.py
-    stein_kernel.py                  # Task 1: RBF kernel, Stein kernel, KSD
-    stein_cv.py                      # Task 2: Stein control variate estimator (RKHS)
-    antithetic.py                    # Task 3: Antithetic SDE integration
-    mcmc_correction.py               # Task 4: MH post-correction
-    enhanced_evaluator.py            # Task 5: Unified evaluation pipeline (all 7 methods)
-    generator_stein.py               # Task 6: SDE generator Stein operator
-    neural_stein_cv.py               # Task 11: Neural Stein CV via differentiated Poisson eq
-    evaluation.py                    # Task 10: Multi-seed systematic evaluation
-    visualization.py                 # Task 10: Publication-quality plots
+    stein_kernel.py                  # RBF kernel, Stein kernel, KSD
+    stein_cv.py                      # Stein control variate estimator (RKHS)
+    antithetic.py                    # Antithetic SDE integration
+    mcmc_correction.py               # MH post-correction
+    enhanced_evaluator.py            # Unified evaluation pipeline
+    generator_stein.py               # SDE generator Stein operator
+    neural_stein_cv.py               # Neural Stein CV via PDE loss (SML-style)
+    egnn_stein_cv.py                 # EGNN-based g-networks: EGNNSteinCV, SteinEGNN, SteinEGNN_LN
+    variance_stein_cv.py             # KSH-style: SteinBiasCorrector (var loss), ScoreInformedSteinCV
+    score_matching.py                # KSH-style: ScoreEGNN, ImplicitScoreModel (ISM)
+    observables.py                   # Observable functions (energy, interatomic dist, histogram)
+    rbf_collocation_cv.py            # RBF collocation CV
+    evaluation.py                    # Multi-seed systematic evaluation
+    visualization.py                 # Publication-quality plots
 
-eval_enhanced.py                     # Task 7: Single-run evaluation script (hydra)
-run_evaluation.py                    # Task 10: Full evaluation runner (hydra)
+experiments/                         # KSH-style evaluation scripts
+    dw4_ksh_steincv.py               # DW4: 3 seeds × 2 obs, SteinEGNN_LN + variance loss
+    lj13_ksh_steincv.py              # LJ13: ISM + basic CV + score-informed CV
+
+eval_enhanced.py                     # Single-run evaluation script (hydra)
+run_evaluation.py                    # Full evaluation runner (hydra)
 
 tests/
     test_stein_kernel.py
@@ -128,6 +137,51 @@ configs/                             # Hydra configs
 - LJ13 (39D): 500 epochs, exact or Hutchinson, hidden_dim=128
 - LJ55 (165D): 1000 epochs, Hutchinson (1-5 probes), hidden_dim=256
 
+### egnn_stein_cv.py (expanded)
+- `EGNNSteinCV(n_particles, spatial_dim, hidden_nf, n_layers, ...)` — wraps EGNN_dynamics, learnable output_scale
+- `SteinEGNN(n_particles, spatial_dim, hidden_nf, n_layers)` — lightweight EGNN wrapper (KSH-style, no LN)
+- `E_GCL_LN(hidden_nf, ...)` — E(n)-equivariant GCL with LayerNorm in all MLPs
+- `SteinEGNN_LN(n_particles, spatial_dim, hidden_nf, n_layers, tanh, condition_time)` — standalone EGNN with LayerNorm
+  - Preferred g-network for variance-loss Stein CV (better training stability)
+  - Coord MLP last layer init: xavier_uniform_(gain=0.001)
+  - Coord diff normalized: coord_diff / (norm + 1) for stable gradients
+  - Edge attributes computed once (not per-layer), edge indices cached per (B, device)
+  - Output: COM-free via remove_mean
+
+### variance_stein_cv.py (KSH-style, NEW)
+- `stein_operator_on_net(g_net, x_flat, score_flat, use_hutchinson, n_probes)` → (B,) Stein operator values
+  - Flat-space API: detaches x, reattaches grad, computes score·g + div(g)
+- `SteinBiasCorrector(g_net, use_hutchinson, n_probes)` — variance-loss Stein CV trainer
+  - `fit(samples, grad_E, f_vals, lr, n_iters, batch_size, val_fraction, patience, bias_penalty, val_sampler)`
+  - Loss: Var[f + T_ν g] + λ·E[T_ν g]²
+  - Validation: 3 modes (fresh sampler / fixed split / train-only)
+  - Early stopping (patience=6), cosine LR, grad clip=5.0
+  - `estimate(samples, grad_E, f_vals)` → (mean_float, Tg_tensor)
+- `ScoreInformedSteinCV(g_residual_net, score_model, use_hutchinson, n_probes)` — score-decomposition CV
+  - g = α·g_init + g_res where g_init = -(∇E + s_ϕ)
+  - α: log-parameterized scalar (init=0.01)
+  - T_ν g_init: precomputed once (frozen), only g_res and α trained
+  - Loss: mean((h - running_mean)²) with EMA decay=0.99
+  - `fit(samples, energy, f_vals, ...)`, `eval_all(samples, grad_E, f_vals, Tg_init)`
+
+### score_matching.py (KSH-style, NEW)
+- `_build_edges(n_particles, n_systems, device)` → (edge_index, batch) for fully-connected graphs
+- `ScoreEGNN(n_particles, spatial_dim, hidden_nf, n_layers, coord_init_gain)` — EGNN score model
+  - Wraps EGNN_dynamics, condition_time=True, evaluates at t=1.0
+  - Coord layer reinit with small gain (0.1) for stable ISM training
+  - Forward: (x, batch, edge_index) particle format
+- `ImplicitScoreModel(s_net, dim, use_hutchinson, n_probes, grad_clip, device)` — ISM trainer
+  - ISM loss: E[½||s_ϕ||² + div(s_ϕ)] (Hyvärinen score matching)
+  - `fit(samples, lr=3e-4, n_iters=5000, batch_size=256)`
+  - `diagnose(samples, grad_E)` — prints cosine_sim(s_ϕ, -∇E) and ||s_ϕ + ∇E||
+
+### observables.py (NEW)
+- `mean_energy_observable(x, energy_fn)` → (B,) energies
+- `mean_interatomic_distance(x, n_particles, spatial_dim)` → (B,) mean pairwise distances
+- `interatomic_dist_histogram(x, n_particles, spatial_dim, bins, range_min, range_max)` → (bins,)
+- `observable_gradient(x, observable_fn)` → (B, dim) via autograd
+- All accept flat (B, dim) input (SML convention)
+
 ### enhanced_evaluator.py
 - `evaluate_enhanced(samples, energy, ref_energies, mh_steps, stein_reg_lambda, max_stein_samples)` → dict
 - Runs: KSD → naive → Stein CV → MCMC → hybrid (MCMC+Stein CV) → Neural CV → ground truth comparison
@@ -183,12 +237,20 @@ bash scripts/download.sh  # download reference samples to data/
 - **Regime 2 (MCMC + CV):** Expensive but exact — MCMC ensures samples from p, CV provides pure variance reduction
 
 ### Neural vs RKHS Stein CV
-| Property | RKHS (Task 2) | Neural (Task 11) |
-|----------|---------------|------------------|
-| Compute | O(N³ + N²d) | O(epochs × B × d) |
-| Memory | O(N²) | O(net params) |
-| High-d | Poor (kernel degrades) | Good |
-| Best for | DW4 (12D) | LJ55 (165D) |
+| Property | RKHS (Task 2) | Neural PDE (SML) | Neural Var (KSH) |
+|----------|---------------|------------------|------------------|
+| Compute | O(N³ + N²d) | O(epochs × B × d) | O(iters × B × d) |
+| Memory | O(N²) | O(net params) | O(net params) |
+| High-d | Poor (kernel degrades) | Good | Good |
+| g-network | N/A (kernel) | MLP | EGNN (equivariant) |
+| Loss | Closed-form | ‖∇h‖² (PDE) | Var[h] |
+| Needs ∇f | No | Yes | No |
+| Validation | No | No | Yes (early stopping) |
+| Best for | DW4 (12D) | LJ55 (165D) | Particle systems |
+
+### KSH-Style Experiment Scripts
+- `experiments/dw4_ksh_steincv.py`: 3 seeds × 2 observables, SteinEGNN_LN + SteinBiasCorrector
+- `experiments/lj13_ksh_steincv.py`: ISM → basic Stein CV → score-informed CV, 200 bootstrap trials
 
 ## Gotchas
 
@@ -202,3 +264,8 @@ bash scripts/download.sh  # download reference samples to data/
 8. **Neural CV gradient clipping**: Essential — PDE loss involves second derivatives that can explode early in training. Use `max_norm=10.0`.
 9. **conda run swallows stdout**: Use direct python binary `/root/miniconda3/envs/Sampling_env/bin/python -u` instead of `conda run -n Sampling_env`.
 10. **Hydra changes CWD**: Checkpoints saved by Hydra go to `results/local/<date>/<time>/checkpoints/`, not the working directory.
+11. **SteinEGNN_LN edge_attr**: Computed once before all layers (not recomputed per layer). This is a design choice for the LN variant vs base EGNN.
+12. **ScoreInformedSteinCV running mean**: Loss is `mean((h - running_mean)²)`, NOT `h.var()`. The EMA (0.99 decay) provides more stable centering than per-batch mean.
+13. **ISM uses condition_time=True**: ScoreEGNN evaluates at t=1.0 (terminal time). It uses EGNN_dynamics with time conditioning — different from SteinEGNN_LN which has condition_time=False.
+14. **_build_edges duplication**: Defined in both `score_matching.py` and used by `ScoreInformedSteinCV._precompute_Tg_init`. Import from `score_matching.py`.
+15. **Variance loss grad clip = 5.0**: KSH-style modules use max_norm=5.0 (stricter than SML's 10.0 for PDE loss). This is intentional — variance loss has different gradient dynamics.

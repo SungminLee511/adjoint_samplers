@@ -126,3 +126,51 @@ Phase 5B: Implement rbf_collocation_cv.py (~45 min coding)
 Phase 5C: Re-run DW4 eval with 9 methods (~15 min GPU)
 Phase 5D: Update RESULT.md with new results
 ```
+
+---
+
+## Phase 6: KSH-Style Enhancements — Variance-Loss Stein CV
+
+KSH-style methods ported from `KSH_ASBS/stein_cv/`. These use a **different loss function** (Var[h] instead of ‖∇h‖²), an **equivariant g-network** (SteinEGNN_LN), and **validation-based early stopping**.
+
+### 6A. SteinEGNN_LN + SteinBiasCorrector (Variance Loss)
+
+**What:** Train `SteinEGNN_LN` (EGNN with LayerNorm) by minimizing `Var[f + T_ν g]` directly, with train/val split and early stopping.
+
+**Files:** `enhancements/egnn_stein_cv.py` (SteinEGNN_LN), `enhancements/variance_stein_cv.py` (SteinBiasCorrector)
+
+**DW4 config:**
+- g-network: `SteinEGNN_LN(n_particles=4, spatial_dim=2, hidden_nf=64, n_layers=4, tanh=False)`
+- Training: `n_iters=10000, batch_size=2500, lr=1e-3, cosine_lr=True`
+- Validation: `val_fraction=0.2, patience=6`
+- Divergence: exact (dim=8, cheap)
+- Grad clip: 5.0
+
+**Script:** `experiments/dw4_ksh_steincv.py`
+- 3 seeds × 2 observables (energy, interatomic distance)
+- Bootstrap evaluation (2000 resamples)
+- Reports: bias, MSE, reduction ratios
+
+**Why this matters:** Compares two different optimization strategies for the same problem:
+- SML PDE loss: minimizes ‖∇h‖², needs ∇f, no validation
+- KSH variance loss: minimizes Var[h], doesn't need ∇f, has early stopping
+- Same architecture (EGNN) → pure loss-function comparison
+
+**Estimated time:** ~15 min (3 seeds × 2 obs × 10k iters each, but DW4 is small)
+
+### 6B. Results to Capture
+
+Add to RESULT.md:
+- New method row: "SteinEGNN_LN (Var loss)" in Section 4.2 summary table
+- Compare variance reduction: PDE loss vs variance loss on same EGNN architecture
+- Compare bias reduction: does early stopping help?
+- Observable-specific results: energy AND interatomic distance (SML only tracks energy)
+
+### 6C. Execution
+
+```
+Phase 6A: Run dw4_ksh_steincv.py  (~15 min GPU)
+Phase 6B: Extract results, add to RESULT.md  (~5 min)
+```
+
+**Note:** No ScoreInformedSteinCV for DW4 — ISM score matching is overkill for 8D. KSH also only uses basic SteinBiasCorrector for DW4.
