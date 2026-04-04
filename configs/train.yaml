@@ -10,6 +10,7 @@ init_stage: adjoint
 seed: 0
 
 clip_grad_norm: false
+clip_grad_max_norm: 1.0
 checkpoint: null
 save_freq: 100
 

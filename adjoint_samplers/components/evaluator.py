@@ -105,15 +105,20 @@ class SyntheticEenergyEvaluator:
         )
 
 
-        print("Computing particles W2...")
-        M = dist_point_clouds(
-            samples.reshape(-1, self.n_particles, self.n_spatial_dim).cpu(),
-            ref_samples.reshape(-1, self.n_particles, self.n_spatial_dim).cpu(),
-        )
-        a = torch.ones(M.shape[0]) / M.shape[0]
-        b = torch.ones(M.shape[0]) / M.shape[0]
-        eq_w2 = pot.emd2(M=M**2, a=a, b=b)**0.5
-        eq_w2 = eq_w2.item()
+        # Skip particles W2 for large systems (O(B² × n³) is intractable)
+        if self.n_particles <= 13:
+            print("Computing particles W2...")
+            M = dist_point_clouds(
+                samples.reshape(-1, self.n_particles, self.n_spatial_dim).cpu(),
+                ref_samples.reshape(-1, self.n_particles, self.n_spatial_dim).cpu(),
+            )
+            a = torch.ones(M.shape[0]) / M.shape[0]
+            b = torch.ones(M.shape[0]) / M.shape[0]
+            eq_w2 = pot.emd2(M=M**2, a=a, b=b)**0.5
+            eq_w2 = eq_w2.item()
+        else:
+            print(f"Skipping particles W2 (n_particles={self.n_particles} too large)")
+            eq_w2 = float('nan')
 
 
         return {

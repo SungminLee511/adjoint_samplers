@@ -57,7 +57,8 @@ def train_one_epoch(
         loss.backward()
 
         if cfg.clip_grad_norm:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1e20)
+            max_norm = cfg.get("clip_grad_max_norm", 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_norm)
 
         optimizer.step()
 
