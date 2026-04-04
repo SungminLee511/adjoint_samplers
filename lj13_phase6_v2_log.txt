@@ -1,0 +1,331 @@
+======================================================================
+  LJ13 Phase 6: KSH-Style Full Pipeline
+  Part A: ISM score matching
+  Part B: Basic SteinEGNN_LN (Var loss)
+  Part C: Score-Informed CV (ISM + residual)
+  SteinEGNN_LN h=128 L=5, Hutchinson(4 probes)
+  2000 iters, batch=256, eval every 200 steps
+======================================================================
+/root/miniconda3/envs/Sampling_env/lib/python3.10/site-packages/torch/distributions/distribution.py:56: UserWarning: <class 'adjoint_samplers.utils.dist_utils.CenteredParticlesHarmonic'> does not define `arg_constraints`. Please set `arg_constraints = {}` or initialize the distribution with `validate_args=False` to turn off validation.
+  warnings.warn(
+/root/miniconda3/envs/Sampling_env/lib/python3.10/site-packages/torch/distributions/distribution.py:56: UserWarning: <class 'adjoint_samplers.utils.dist_utils.CenteredParticlesGauss'> does not define `arg_constraints`. Please set `arg_constraints = {}` or initialize the distribution with `validate_args=False` to turn off validation.
+  warnings.warn(
+Loaded epoch 4950
+Ground truth:  energy=-43.1270   dist=1.6391
+
+──────────────────────────────────────────────────────────────────────
+  Seed 0
+──────────────────────────────────────────────────────────────────────
+  Generated 5000 samples in 102.2s
+  Naive: energy=-37.5870 (bias=5.54001)  dist=1.6939 (bias=0.05484)
+
+  [ISM] Training score model ...
+  [ScoreMatch] step 500/3000  loss=-673.397949
+  [ScoreMatch] step 1000/3000  loss=-2169.469238
+  [ScoreMatch] step 1500/3000  loss=-2161.515381
+  [ScoreMatch] step 2000/3000  loss=-2505.950928
+  [ScoreMatch] step 2500/3000  loss=-2617.023193
+  [ScoreMatch] step 3000/3000  loss=-2848.118652
+  [ISM] Done in 519.8s
+  [ScoreDiag] cos_sim(s_phi, -∇E): mean=0.9164  std=0.0579
+  [ScoreDiag] |s_phi + ∇E|:        mean=71.7140  std=188.2272
+
+  [energy] Basic CV Training ...
+    step 200/2000  loss=48.2264  val_var=115.3374  lr=9.8e-04 *best*
+    step 400/2000  loss=91.3881  val_var=70.8733  lr=9.1e-04 *best*
+    step 600/2000  loss=64.1262  val_var=63.0958  lr=8.0e-04 *best*
+    step 800/2000  loss=57.1208  val_var=62.4817  lr=6.6e-04 *best*
+    step 1000/2000  loss=70.5320  val_var=56.2234  lr=5.0e-04 *best*
+    step 1200/2000  loss=68.2718  val_var=60.8061  lr=3.5e-04
+    step 1400/2000  loss=67.6525  val_var=54.4877  lr=2.1e-04 *best*
+    step 1600/2000  loss=58.0557  val_var=55.6048  lr=1.0e-04
+    step 1800/2000  loss=60.6563  val_var=55.6472  lr=3.4e-05
+    step 2000/2000  loss=64.2702  val_var=52.9808  lr=1.0e-05 *best*
+    Best val_var=52.9808 at step 2000
+  [energy] Training done in 423.6s
+  [energy] Evaluating ...
+  [energy] Eval done in 1.9s
+    Naive: mean=-37.58698  bias=5.54001  var=2.11e-02  MSE=3.07e+01
+    CV:    mean=-38.33392  bias=4.79307  var=1.31e-02  MSE=2.30e+01
+    MSE reduction: 1.34x  Bias reduction: 1.16x
+
+  [dist] Basic CV Training ...
+    step 200/2000  loss=8.3576  val_var=9.5771  lr=9.8e-04 *best*
+    step 400/2000  loss=4.8343  val_var=1.6238  lr=9.1e-04 *best*
+    step 600/2000  loss=0.0133  val_var=0.0305  lr=8.0e-04 *best*
+    step 800/2000  loss=0.0101  val_var=0.0100  lr=6.6e-04 *best*
+    step 1000/2000  loss=0.0311  val_var=0.0112  lr=5.0e-04
+    step 1200/2000  loss=0.0095  val_var=0.0130  lr=3.5e-04
+    step 1400/2000  loss=0.0100  val_var=0.0116  lr=2.1e-04
+    step 1600/2000  loss=0.0133  val_var=0.0116  lr=1.0e-04
+    step 1800/2000  loss=0.0117  val_var=0.0119  lr=3.4e-05
+    Early stop at step 1800 (no improve for 5 evals)
+    Best val_var=0.0100 at step 800
+  [dist] Training done in 381.6s
+  [dist] Evaluating ...
+  [dist] Eval done in 1.9s
+    Naive: mean=1.69392  bias=0.05484  var=2.37e-06  MSE=3.01e-03
+    CV:    mean=1.69397  bias=0.05490  var=2.37e-06  MSE=3.02e-03
+    MSE reduction: 1.00x  Bias reduction: 1.00x
+
+  [energy] Score-Informed CV Training ...
+    Precomputing T_ν g_init ...
+    T_ν g_init: mean=40110.37  std=1093043.00  α_init=1.00e-02
+  [ScoreSteinCV] step 500/3000  var=193799.968750  α=7.49e-03
+  [ScoreSteinCV] step 1000/3000  var=585970.812500  α=5.43e-03
+  [ScoreSteinCV] step 1500/3000  var=68801.351562  α=4.06e-03
+  [ScoreSteinCV] step 2000/3000  var=79633.546875  α=3.13e-03
+  [ScoreSteinCV] step 2500/3000  var=255813.828125  α=2.31e-03
+  [ScoreSteinCV] step 3000/3000  var=293764.218750  α=1.84e-03
+  [energy] Score CV training done in 642.8s
+    Final α = 1.8377e-03
+  [energy] Score CV Evaluating ...
+  [energy] Score CV Eval done in 1.3s
+    Naive:    mean=-37.58698  bias=5.54001  var=2.27e-02  MSE=3.07e+01
+    ScoreCV:  mean=-7.70913  bias=35.41786  var=6.87e+02  MSE=1.94e+03
+    MSE reduction: 0.02x  Bias reduction: 0.16x
+    α=1.8377e-03  T_ν g_init: mean=40110.37  std=1093043.00
+
+  [dist] Score-Informed CV Training ...
+    Precomputing T_ν g_init ...
+    T_ν g_init: mean=39972.73  std=1093281.00  α_init=1.00e-02
+  [ScoreSteinCV] step 500/3000  var=456309.937500  α=7.20e-03
+  [ScoreSteinCV] step 1000/3000  var=657451.750000  α=5.40e-03
+  [ScoreSteinCV] step 1500/3000  var=316322.437500  α=4.29e-03
+  [ScoreSteinCV] step 2000/3000  var=23791.824219  α=3.47e-03
+  [ScoreSteinCV] step 2500/3000  var=6620.585938  α=3.07e-03
+  [ScoreSteinCV] step 3000/3000  var=13525.099609  α=2.73e-03
+  [dist] Score CV training done in 643.1s
+    Final α = 2.7316e-03
+  [dist] Score CV Evaluating ...
+  [dist] Score CV Eval done in 1.3s
+    Naive:    mean=1.69392  bias=0.05484  var=2.44e-06  MSE=3.01e-03
+    ScoreCV:  mean=21.34262  bias=19.70355  var=7.17e+02  MSE=1.11e+03
+    MSE reduction: 0.00x  Bias reduction: 0.00x
+    α=2.7316e-03  T_ν g_init: mean=39972.73  std=1093281.00
+
+──────────────────────────────────────────────────────────────────────
+  Seed 1
+──────────────────────────────────────────────────────────────────────
+  Generated 5000 samples in 103.4s
+  Naive: energy=-37.5582 (bias=5.56883)  dist=1.6947 (bias=0.05565)
+
+  [energy] Basic CV Training ...
+    step 200/2000  loss=140.6258  val_var=63.5054  lr=9.8e-04 *best*
+    step 400/2000  loss=135.3623  val_var=159.6118  lr=9.1e-04
+    step 600/2000  loss=71.9149  val_var=76.2422  lr=8.0e-04
+    step 800/2000  loss=53.4142  val_var=62.6121  lr=6.6e-04 *best*
+    step 1000/2000  loss=93.1506  val_var=66.5511  lr=5.0e-04
+    step 1200/2000  loss=72.1113  val_var=62.8921  lr=3.5e-04
+    step 1400/2000  loss=84.1124  val_var=69.3481  lr=2.1e-04
+    step 1600/2000  loss=58.3647  val_var=60.8409  lr=1.0e-04 *best*
+    step 1800/2000  loss=63.6572  val_var=63.9497  lr=3.4e-05
+    step 2000/2000  loss=101.5937  val_var=61.0210  lr=1.0e-05
+    Best val_var=60.8409 at step 1600
+  [energy] Training done in 423.6s
+  [energy] Evaluating ...
+  [energy] Eval done in 1.9s
+    Naive: mean=-37.55816  bias=5.56883  var=1.78e-02  MSE=3.10e+01
+    CV:    mean=-38.15787  bias=4.96912  var=1.25e-02  MSE=2.47e+01
+    MSE reduction: 1.26x  Bias reduction: 1.12x
+
+  [dist] Basic CV Training ...
+    step 200/2000  loss=82.9899  val_var=155.8698  lr=9.8e-04 *best*
+    step 400/2000  loss=5.9416  val_var=2.8829  lr=9.1e-04 *best*
+    step 600/2000  loss=0.0112  val_var=0.0267  lr=8.0e-04 *best*
+    step 800/2000  loss=0.0156  val_var=0.0127  lr=6.6e-04 *best*
+    step 1000/2000  loss=0.0137  val_var=0.0115  lr=5.0e-04 *best*
+    step 1200/2000  loss=0.0139  val_var=0.0127  lr=3.5e-04
+    step 1400/2000  loss=0.0132  val_var=0.0141  lr=2.1e-04
+    step 1600/2000  loss=0.0111  val_var=0.0117  lr=1.0e-04
+    step 1800/2000  loss=0.0131  val_var=0.0115  lr=3.4e-05
+    step 2000/2000  loss=0.0113  val_var=0.0117  lr=1.0e-05
+    Early stop at step 2000 (no improve for 5 evals)
+    Best val_var=0.0115 at step 1000
+  [dist] Training done in 424.0s
+  [dist] Evaluating ...
+  [dist] Eval done in 1.9s
+    Naive: mean=1.69473  bias=0.05565  var=2.26e-06  MSE=3.10e-03
+    CV:    mean=1.70084  bias=0.06177  var=2.43e-06  MSE=3.82e-03
+    MSE reduction: 0.81x  Bias reduction: 0.90x
+
+  [energy] Score-Informed CV Training ...
+    Precomputing T_ν g_init ...
+    T_ν g_init: mean=29456.49  std=450112.00  α_init=1.00e-02
+  [ScoreSteinCV] step 500/3000  var=523908.031250  α=7.15e-03
+  [ScoreSteinCV] step 1000/3000  var=29584500.000000  α=5.18e-03
+  [ScoreSteinCV] step 1500/3000  var=110734.125000  α=4.07e-03
+  [ScoreSteinCV] step 2000/3000  var=211744.437500  α=3.59e-03
+  [ScoreSteinCV] step 2500/3000  var=159034.609375  α=3.20e-03
+  [ScoreSteinCV] step 3000/3000  var=239008.875000  α=2.84e-03
+  [energy] Score CV training done in 642.8s
+    Final α = 2.8406e-03
+  [energy] Score CV Evaluating ...
+  [energy] Score CV Eval done in 1.3s
+    Naive:    mean=-37.55816  bias=5.56883  var=1.85e-02  MSE=3.10e+01
+    ScoreCV:  mean=-40.17675  bias=2.95024  var=7.40e+01  MSE=8.27e+01
+    MSE reduction: 0.38x  Bias reduction: 1.89x
+    α=2.8406e-03  T_ν g_init: mean=29456.49  std=450112.00
+
+  [dist] Score-Informed CV Training ...
+    Precomputing T_ν g_init ...
+    T_ν g_init: mean=29394.27  std=450783.28  α_init=1.00e-02
+  [ScoreSteinCV] step 500/3000  var=55566268.000000  α=7.09e-03
+  [ScoreSteinCV] step 1000/3000  var=31679934.000000  α=5.23e-03
+  [ScoreSteinCV] step 1500/3000  var=171583.218750  α=4.01e-03
+  [ScoreSteinCV] step 2000/3000  var=76303.375000  α=3.05e-03
+  [ScoreSteinCV] step 2500/3000  var=6393.233398  α=2.41e-03
+  [ScoreSteinCV] step 3000/3000  var=70520.500000  α=1.87e-03
+  [dist] Score CV training done in 642.3s
+    Final α = 1.8738e-03
+  [dist] Score CV Evaluating ...
+  [dist] Score CV Eval done in 1.3s
+    Naive:    mean=1.69473  bias=0.05565  var=2.38e-06  MSE=3.10e-03
+    ScoreCV:  mean=8.05764  bias=6.41857  var=9.14e+01  MSE=1.33e+02
+    MSE reduction: 0.00x  Bias reduction: 0.01x
+    α=1.8738e-03  T_ν g_init: mean=29394.27  std=450783.28
+
+──────────────────────────────────────────────────────────────────────
+  Seed 2
+──────────────────────────────────────────────────────────────────────
+  Generated 5000 samples in 103.4s
+  Naive: energy=-37.5923 (bias=5.53474)  dist=1.6938 (bias=0.05474)
+
+  [energy] Basic CV Training ...
+    step 200/2000  loss=62.1855  val_var=97.6423  lr=9.8e-04 *best*
+    step 400/2000  loss=89.4249  val_var=63.8776  lr=9.1e-04 *best*
+    step 600/2000  loss=247.2066  val_var=55.8636  lr=8.0e-04 *best*
+    step 800/2000  loss=58.7302  val_var=52.3168  lr=6.6e-04 *best*
+    step 1000/2000  loss=53.8026  val_var=52.8441  lr=5.0e-04
+    step 1200/2000  loss=63.5056  val_var=56.3508  lr=3.5e-04
+    step 1400/2000  loss=56.4902  val_var=58.7818  lr=2.1e-04
+    step 1600/2000  loss=56.6809  val_var=58.3966  lr=1.0e-04
+    step 1800/2000  loss=63.8614  val_var=54.3272  lr=3.4e-05
+    Early stop at step 1800 (no improve for 5 evals)
+    Best val_var=52.3168 at step 800
+  [energy] Training done in 381.1s
+  [energy] Evaluating ...
+  [energy] Eval done in 1.9s
+    Naive: mean=-37.59225  bias=5.53474  var=2.16e-02  MSE=3.07e+01
+    CV:    mean=-38.29056  bias=4.83643  var=1.27e-02  MSE=2.34e+01
+    MSE reduction: 1.31x  Bias reduction: 1.14x
+
+  [dist] Basic CV Training ...
+    step 200/2000  loss=0.0185  val_var=72.4781  lr=9.8e-04 *best*
+    step 400/2000  loss=12.9355  val_var=5.3986  lr=9.1e-04 *best*
+    step 600/2000  loss=0.1178  val_var=0.3693  lr=8.0e-04 *best*
+    step 800/2000  loss=0.0204  val_var=0.0130  lr=6.6e-04 *best*
+    step 1000/2000  loss=0.0115  val_var=0.0089  lr=5.0e-04 *best*
+    step 1200/2000  loss=0.0098  val_var=0.0100  lr=3.5e-04
+    step 1400/2000  loss=0.0100  val_var=0.0104  lr=2.1e-04
+    step 1600/2000  loss=0.0136  val_var=0.0118  lr=1.0e-04
+    step 1800/2000  loss=0.0107  val_var=0.0100  lr=3.4e-05
+    step 2000/2000  loss=0.0094  val_var=0.0109  lr=1.0e-05
+    Early stop at step 2000 (no improve for 5 evals)
+    Best val_var=0.0089 at step 1000
+  [dist] Training done in 423.9s
+  [dist] Evaluating ...
+  [dist] Eval done in 1.9s
+    Naive: mean=1.69381  bias=0.05474  var=2.27e-06  MSE=3.00e-03
+    CV:    mean=1.69677  bias=0.05769  var=2.22e-06  MSE=3.33e-03
+    MSE reduction: 0.90x  Bias reduction: 0.95x
+
+  [energy] Score-Informed CV Training ...
+    Precomputing T_ν g_init ...
+    T_ν g_init: mean=42500.12  std=1263164.75  α_init=1.00e-02
+  [ScoreSteinCV] step 500/3000  var=2499141632.000000  α=7.10e-03
+  [ScoreSteinCV] step 1000/3000  var=408496.531250  α=5.29e-03
+  [ScoreSteinCV] step 1500/3000  var=23095330.000000  α=4.03e-03
+  [ScoreSteinCV] step 2000/3000  var=48021.652344  α=3.41e-03
+  [ScoreSteinCV] step 2500/3000  var=42313.531250  α=3.13e-03
+  [ScoreSteinCV] step 3000/3000  var=10752.402344  α=2.88e-03
+  [energy] Score CV training done in 642.7s
+    Final α = 2.8790e-03
+  [energy] Score CV Evaluating ...
+  [energy] Score CV Eval done in 1.3s
+    Naive:    mean=-37.59225  bias=5.53474  var=2.06e-02  MSE=3.07e+01
+    ScoreCV:  mean=38.25420  bias=81.38119  var=1.85e+03  MSE=8.48e+03
+    MSE reduction: 0.00x  Bias reduction: 0.07x
+    α=2.8790e-03  T_ν g_init: mean=42500.12  std=1263164.75
+
+  [dist] Score-Informed CV Training ...
+    Precomputing T_ν g_init ...
+    T_ν g_init: mean=42585.19  std=1267840.25  α_init=1.00e-02
+  [ScoreSteinCV] step 500/3000  var=176495.937500  α=7.04e-03
+  [ScoreSteinCV] step 1000/3000  var=243996.859375  α=5.09e-03
+  [ScoreSteinCV] step 1500/3000  var=739354.750000  α=3.90e-03
+  [ScoreSteinCV] step 2000/3000  var=517058.687500  α=2.95e-03
+  [ScoreSteinCV] step 2500/3000  var=270341.468750  α=2.26e-03
+  [ScoreSteinCV] step 3000/3000  var=3202291.750000  α=1.68e-03
+  [dist] Score CV training done in 642.5s
+    Final α = 1.6803e-03
+  [dist] Score CV Evaluating ...
+  [dist] Score CV Eval done in 1.3s
+    Naive:    mean=1.69381  bias=0.05474  var=2.25e-06  MSE=3.00e-03
+    ScoreCV:  mean=66.61954  bias=64.98047  var=8.83e+02  MSE=5.11e+03
+    MSE reduction: 0.00x  Bias reduction: 0.00x
+    α=1.6803e-03  T_ν g_init: mean=42585.19  std=1267840.25
+
+======================================================================
+  FINAL SUMMARY — Basic SteinCV (mean ± std over 3 seeds)
+======================================================================
+
+  ── energy (GT=-43.1270) ──
+    naive_mean        : -37.57913 ± 0.01498
+    naive_bias        : 5.54786 ± 0.01498
+    naive_var         : 2.02e-02 ± 1.65e-03
+    naive_mse         : 3.08e+01 ± 1.65e-01
+    cv_mean           : -38.26078 ± 0.07489
+    cv_bias           : 4.86621 ± 0.07489
+    cv_var            : 1.28e-02 ± 2.72e-04
+    cv_mse            : 2.37e+01 ± 7.32e-01
+    mse_reduction     : 1.30066 ± 0.03333
+    bias_reduction    : 1.14030 ± 0.01464
+
+  ── dist (GT=1.6391) ──
+    naive_mean        : 1.69415 ± 0.00041
+    naive_bias        : 0.05508 ± 0.00041
+    naive_var         : 2.30e-06 ± 4.98e-08
+    naive_mse         : 3.04e-03 ± 4.50e-05
+    cv_mean           : 1.69719 ± 0.00282
+    cv_bias           : 0.05812 ± 0.00282
+    cv_var            : 2.34e-06 ± 9.01e-08
+    cv_mse            : 3.39e-03 ± 3.30e-04
+    mse_reduction     : 0.90335 ± 0.07600
+    bias_reduction    : 0.94958 ± 0.04001
+
+======================================================================
+  FINAL SUMMARY — Score-Informed CV (mean ± std over 3 seeds)
+======================================================================
+
+  ── energy (GT=-43.1270) ──
+    naive_mean        : -37.57913 ± 0.01498
+    naive_bias        : 5.54786 ± 0.01498
+    naive_var         : 2.06e-02 ± 1.71e-03
+    naive_mse         : 3.08e+01 ± 1.65e-01
+    cv_mean           : -3.21056 ± 32.17692
+    cv_bias           : 39.91643 ± 32.17692
+    cv_var            : 8.71e+02 ± 7.38e+02
+    cv_mse            : 3.50e+03 ± 3.60e+03
+    mse_reduction     : 0.13159 ± 0.17243
+    bias_reduction    : 0.70401 ± 0.83770
+    alpha             : 2.5191e-03 ± 4.8209e-04
+    Tg_init_mean      : 3.7356e+04 ± 5.6701e+03
+    Tg_init_std       : 9.3544e+05 ± 3.5014e+05
+
+  ── dist (GT=1.6391) ──
+    naive_mean        : 1.69415 ± 0.00041
+    naive_bias        : 0.05508 ± 0.00041
+    naive_var         : 2.36e-06 ± 7.70e-08
+    naive_mse         : 3.04e-03 ± 4.51e-05
+    cv_mean           : 32.00660 ± 25.06876
+    cv_bias           : 30.36753 ± 25.06876
+    cv_var            : 5.64e+02 ± 3.41e+02
+    cv_mse            : 2.11e+03 ± 2.15e+03
+    mse_reduction     : 0.00001 ± 0.00001
+    bias_reduction    : 0.00410 ± 0.00333
+    alpha             : 2.0952e-03 ± 4.5689e-04
+    Tg_init_mean      : 3.7317e+04 ± 5.7031e+03
+    Tg_init_std       : 9.3730e+05 ± 3.5132e+05
+
+Done.

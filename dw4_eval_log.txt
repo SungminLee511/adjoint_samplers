@@ -1,0 +1,95 @@
+/root/miniconda3/envs/Sampling_env/lib/python3.10/site-packages/torch/distributions/distribution.py:56: UserWarning: <class 'adjoint_samplers.utils.dist_utils.CenteredParticlesHarmonic'> does not define `arg_constraints`. Please set `arg_constraints = {}` or initialize the distribution with `validate_args=False` to turn off validation.
+  warnings.warn(
+/root/miniconda3/envs/Sampling_env/lib/python3.10/site-packages/torch/distributions/distribution.py:56: UserWarning: <class 'adjoint_samplers.utils.dist_utils.CenteredParticlesGauss'> does not define `arg_constraints`. Please set `arg_constraints = {}` or initialize the distribution with `validate_args=False` to turn off validation.
+  warnings.warn(
+Loaded checkpoint (epoch 4819)
+Ground truth mean energy: -22.450394
+
+========== MAIN EVALUATION ==========
+
+--- N = 100 ---
+  seed 0: naive=-22.5318, stein=-23.2433, neural=-21.7257, egnn=-21.7016, rbf=-23.4294 (50.9s)
+  seed 1: naive=-22.3994, stein=-22.6782, neural=-21.9364, egnn=-21.8873, rbf=-24.0350 (50.2s)
+  seed 2: naive=-22.5357, stein=-23.2967, neural=-20.4889, egnn=-20.4343, rbf=-24.5058 (50.8s)
+  seed 3: naive=-22.3558, stein=-22.4029, neural=-23.4795, egnn=-23.3257, rbf=-23.5487 (50.9s)
+  seed 4: naive=-22.4843, stein=-22.4719, neural=-22.6636, egnn=-22.7500, rbf=-24.3867 (50.0s)
+  seed 5: naive=-22.6235, stein=-22.6648, neural=-27.7926, egnn=-27.9732, rbf=-23.6993 (50.5s)
+  seed 6: naive=-22.3903, stein=-22.5947, neural=-24.5705, egnn=-24.7436, rbf=-23.8922 (50.6s)
+  seed 7: naive=-22.4523, stein=-23.1710, neural=-17.8504, egnn=-17.9077, rbf=-24.9337 (50.5s)
+  seed 8: naive=-22.5187, stein=-23.4263, neural=-19.9366, egnn=-19.7824, rbf=-21.6257 (50.7s)
+  seed 9: naive=-21.8020, stein=-21.7863, neural=-26.3450, egnn=-26.3491, rbf=-24.2323 (50.4s)
+
+--- N = 500 ---
+  seed 0: naive=-22.4868, stein=-23.3428, neural=-19.4161, egnn=-19.3880, rbf=-23.3823 (51.3s)
+  seed 1: naive=-22.4708, stein=-23.3475, neural=-20.9203, egnn=-20.9018, rbf=-22.9011 (52.0s)
+  seed 2: naive=-22.4562, stein=-23.5451, neural=-20.4802, egnn=-20.5086, rbf=-23.1869 (52.3s)
+  seed 3: naive=-22.5512, stein=-23.8132, neural=-24.1637, egnn=-24.1724, rbf=-23.1299 (52.7s)
+  seed 4: naive=-22.4577, stein=-23.2847, neural=-23.1306, egnn=-23.0229, rbf=-22.9339 (52.5s)
+  seed 5: naive=-22.3436, stein=-23.3639, neural=-21.6681, egnn=-21.5065, rbf=-26.8429 (52.5s)
+  seed 6: naive=-22.3130, stein=-23.5750, neural=-23.3548, egnn=-23.2969, rbf=-22.5316 (52.6s)
+  seed 7: naive=-22.4459, stein=-23.7910, neural=-21.0459, egnn=-21.0976, rbf=-22.7333 (52.7s)
+  seed 8: naive=-22.3820, stein=-23.2190, neural=-21.7783, egnn=-21.7450, rbf=-23.5716 (52.0s)
+  seed 9: naive=-22.3458, stein=-23.3565, neural=-20.1669, egnn=-20.1824, rbf=-22.4310 (52.6s)
+
+--- N = 1000 ---
+  seed 0: naive=-22.3550, stein=-24.1192, neural=-22.7102, egnn=-22.6779, rbf=-22.2277 (51.5s)
+  seed 1: naive=-22.3864, stein=-24.5529, neural=-21.5001, egnn=-21.4955, rbf=-22.8064 (52.5s)
+  seed 2: naive=-22.3255, stein=-24.4457, neural=-22.1570, egnn=-22.1227, rbf=-22.8243 (52.5s)
+  seed 3: naive=-22.2649, stein=-24.5799, neural=-21.2704, egnn=-21.2705, rbf=-22.4665 (52.0s)
+  seed 4: naive=-22.3744, stein=-24.2216, neural=-21.8968, egnn=-21.8079, rbf=-23.1069 (51.8s)
+  seed 5: naive=-22.4227, stein=-24.4908, neural=-23.3024, egnn=-23.3180, rbf=-22.4012 (51.6s)
+  seed 6: naive=-22.4258, stein=-24.2503, neural=-21.4800, egnn=-21.4356, rbf=-22.6645 (53.1s)
+  seed 7: naive=-22.2500, stein=-24.2530, neural=-22.6143, egnn=-22.5605, rbf=-22.6196 (52.2s)
+  seed 8: naive=-22.2369, stein=-23.6862, neural=-21.3194, egnn=-21.2849, rbf=-22.5100 (52.2s)
+  seed 9: naive=-22.4936, stein=-24.4259, neural=-20.8470, egnn=-20.8276, rbf=-22.6785 (52.0s)
+
+--- N = 2000 ---
+  seed 0: naive=-22.4331, stein=-25.2257, neural=-21.3619, egnn=-21.3296, rbf=-23.0229 (52.5s)
+  seed 1: naive=-22.4121, stein=-25.3413, neural=-22.2590, egnn=-22.2713, rbf=-22.2963 (60.2s)
+  seed 2: naive=-22.4565, stein=-24.7728, neural=-21.3854, egnn=-21.3817, rbf=-22.5796 (79.3s)
+  seed 3: naive=-22.3860, stein=-25.2138, neural=-21.5622, egnn=-21.5658, rbf=-22.8005 (76.9s)
+  seed 4: naive=-22.3663, stein=-25.0890, neural=-21.4920, egnn=-21.5136, rbf=-22.5863 (78.5s)
+  seed 5: naive=-22.4284, stein=-25.1404, neural=-21.3501, egnn=-21.2888, rbf=-22.5691 (76.9s)
+  seed 6: naive=-22.4499, stein=-25.0390, neural=-22.1371, egnn=-22.1209, rbf=-22.6930 (70.8s)
+  seed 7: naive=-22.4666, stein=-24.9678, neural=-21.4034, egnn=-21.3560, rbf=-22.5724 (61.0s)
+  seed 8: naive=-22.3209, stein=-24.7578, neural=-23.0228, egnn=-22.9718, rbf=-22.4778 (66.6s)
+  seed 9: naive=-22.3731, stein=-25.2456, neural=-22.6404, egnn=-22.6400, rbf=-22.6276 (64.3s)
+Results saved to /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/results.json
+
+========== MCMC ABLATION ==========
+  K=0: error_mcmc=0.084246, acceptance=0.0000
+  K=5: error_mcmc=0.083300, acceptance=0.0040
+  K=10: error_mcmc=0.082581, acceptance=0.0042
+  K=20: error_mcmc=0.075029, acceptance=0.0042
+  K=50: error_mcmc=0.058741, acceptance=0.0040
+
+========== GENERATING PLOTS ==========
+Saved: /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/error_vs_N.png
+Saved: /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/variance_vs_N.png
+Saved: /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/variance_reduction_bars.png
+Saved: /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/ksd_vs_N.png
+Saved: /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/antithetic_correlation.png
+Saved: /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/summary_table.png
+
+All plots saved to /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/
+Saved: /home/RESEARCH/adjoint_samplers/eval_results/dw4_asbs/mcmc_ablation.png
+
+========== FINAL SUMMARY (DW4, N=2000) ==========
+  Ground truth:       -22.450394
+  KSD^2:              0.020102 +/- 0.011790
+  MH acceptance:      0.0041
+  Anti correlation:   0.3735
+
+  Method                     Estimate    |Error|          Var   VarRatio
+  ------------------------------------------------------------------
+  Vanilla                  -22.409287   0.045563     1.92e-03        ---
+  Stein CV                 -25.079315   2.628921     1.45e-03      0.759
+  Antithetic               -22.393354   0.059227     1.32e-03      0.688
+  MCMC                     -22.408411   0.046740     1.92e-03        ---
+  MCMC+Stein               -24.851169   2.400775     1.31e-03        ---
+  Gen Stein CV             -22.401670   0.051049     2.40e-03        ---
+  Neural CV                -21.861433   0.741452     6.00e-01    313.279
+  EGNN CV                  -21.843945   0.748649     5.96e-01    311.415
+  RBF Colloc CV            -22.622552   0.202984     3.67e-02     19.327
+
+Done.

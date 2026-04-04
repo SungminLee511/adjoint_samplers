@@ -1,0 +1,166 @@
+======================================================================
+  DW4 Phase 6: KSH-Style SteinCV (optimized)
+  SteinEGNN_LN h=64 L=4, Hutchinson(4 probes)
+  2000 iters, batch=256, eval every 200 steps
+  Val: 0.2, patience=5, cosine LR
+======================================================================
+/root/miniconda3/envs/Sampling_env/lib/python3.10/site-packages/torch/distributions/distribution.py:56: UserWarning: <class 'adjoint_samplers.utils.dist_utils.CenteredParticlesHarmonic'> does not define `arg_constraints`. Please set `arg_constraints = {}` or initialize the distribution with `validate_args=False` to turn off validation.
+  warnings.warn(
+/root/miniconda3/envs/Sampling_env/lib/python3.10/site-packages/torch/distributions/distribution.py:56: UserWarning: <class 'adjoint_samplers.utils.dist_utils.CenteredParticlesGauss'> does not define `arg_constraints`. Please set `arg_constraints = {}` or initialize the distribution with `validate_args=False` to turn off validation.
+  warnings.warn(
+Loaded epoch 4819
+Ground truth:  energy=-22.4504   dist=3.9700
+
+──────────────────────────────────────────────────────────────────────
+  Seed 0
+──────────────────────────────────────────────────────────────────────
+  Generated 5000 samples in 3.3s
+  Naive: energy=-22.3999 (bias=0.05049)  dist=3.9079 (bias=0.06212)
+
+  [energy] Training ...
+    step 200/2000  loss=3.4537  val_var=3.5306  lr=9.8e-04 *best*
+    step 400/2000  loss=2.5069  val_var=2.2461  lr=9.1e-04 *best*
+    step 600/2000  loss=1.6586  val_var=1.9052  lr=8.0e-04 *best*
+    step 800/2000  loss=1.7466  val_var=2.0990  lr=6.6e-04
+    step 1000/2000  loss=1.4964  val_var=1.4891  lr=5.0e-04 *best*
+    step 1200/2000  loss=1.5701  val_var=1.6555  lr=3.5e-04
+    step 1400/2000  loss=1.5271  val_var=1.4791  lr=2.1e-04 *best*
+    step 1600/2000  loss=1.4175  val_var=1.5582  lr=1.0e-04
+    step 1800/2000  loss=1.3807  val_var=1.7005  lr=3.4e-05
+    step 2000/2000  loss=1.1718  val_var=1.7079  lr=1.0e-05
+    Best val_var=1.4791 at step 1400
+  [energy] Training done in 237.9s
+  [energy] Evaluating ...
+  [energy] Eval done in 1.0s
+    Naive: mean=-22.39990  bias=0.05049  var=8.51e-04  MSE=3.40e-03
+    CV:    mean=-22.40578  bias=0.04462  var=2.62e-04  MSE=2.25e-03
+    MSE reduction: 1.51x  Bias reduction: 1.13x
+
+  [dist] Training ...
+    step 200/2000  loss=0.2445  val_var=0.2226  lr=9.8e-04 *best*
+    step 400/2000  loss=0.2381  val_var=0.2278  lr=9.1e-04
+    step 600/2000  loss=0.2469  val_var=0.2351  lr=8.0e-04
+    step 800/2000  loss=0.2377  val_var=0.2378  lr=6.6e-04
+    step 1000/2000  loss=0.2439  val_var=0.2332  lr=5.0e-04
+    step 1200/2000  loss=0.2224  val_var=0.2420  lr=3.5e-04
+    Early stop at step 1200 (no improve for 5 evals)
+    Best val_var=0.2226 at step 200
+  [dist] Training done in 142.7s
+  [dist] Evaluating ...
+  [dist] Eval done in 0.9s
+    Naive: mean=3.90789  bias=0.06212  var=5.19e-05  MSE=3.91e-03
+    CV:    mean=3.90653  bias=0.06348  var=4.87e-05  MSE=4.08e-03
+    MSE reduction: 0.96x  Bias reduction: 0.98x
+
+──────────────────────────────────────────────────────────────────────
+  Seed 1
+──────────────────────────────────────────────────────────────────────
+  Generated 5000 samples in 3.1s
+  Naive: energy=-22.3585 (bias=0.09190)  dist=3.9168 (bias=0.05318)
+
+  [energy] Training ...
+    step 200/2000  loss=2.6834  val_var=3.2959  lr=9.8e-04 *best*
+    step 400/2000  loss=2.2220  val_var=1.8762  lr=9.1e-04 *best*
+    step 600/2000  loss=1.9312  val_var=2.2320  lr=8.0e-04
+    step 800/2000  loss=1.5033  val_var=2.1088  lr=6.6e-04
+    step 1000/2000  loss=2.0947  val_var=1.9098  lr=5.0e-04
+    step 1200/2000  loss=1.8900  val_var=1.9131  lr=3.5e-04
+    step 1400/2000  loss=2.2628  val_var=1.9310  lr=2.1e-04
+    Early stop at step 1400 (no improve for 5 evals)
+    Best val_var=1.8762 at step 400
+  [energy] Training done in 167.4s
+  [energy] Evaluating ...
+  [energy] Eval done in 1.0s
+    Naive: mean=-22.35849  bias=0.09190  var=7.95e-04  MSE=9.24e-03
+    CV:    mean=-22.34993  bias=0.10046  var=3.81e-04  MSE=1.05e-02
+    MSE reduction: 0.88x  Bias reduction: 0.91x
+
+  [dist] Training ...
+    step 200/2000  loss=0.2552  val_var=0.2350  lr=9.8e-04 *best*
+    step 400/2000  loss=0.2445  val_var=0.2470  lr=9.1e-04
+    step 600/2000  loss=0.2280  val_var=0.2385  lr=8.0e-04
+    step 800/2000  loss=0.2495  val_var=0.2402  lr=6.6e-04
+    step 1000/2000  loss=0.2322  val_var=0.2389  lr=5.0e-04
+    step 1200/2000  loss=0.2313  val_var=0.2376  lr=3.5e-04
+    Early stop at step 1200 (no improve for 5 evals)
+    Best val_var=0.2350 at step 200
+  [dist] Training done in 143.6s
+  [dist] Evaluating ...
+  [dist] Eval done in 0.9s
+    Naive: mean=3.91683  bias=0.05318  var=5.09e-05  MSE=2.88e-03
+    CV:    mean=3.91683  bias=0.05318  var=4.86e-05  MSE=2.88e-03
+    MSE reduction: 1.00x  Bias reduction: 1.00x
+
+──────────────────────────────────────────────────────────────────────
+  Seed 2
+──────────────────────────────────────────────────────────────────────
+  Generated 5000 samples in 3.0s
+  Naive: energy=-22.3717 (bias=0.07872)  dist=3.9100 (bias=0.06003)
+
+  [energy] Training ...
+    step 200/2000  loss=1.9164  val_var=2.2332  lr=9.8e-04 *best*
+    step 400/2000  loss=2.3722  val_var=2.0292  lr=9.1e-04 *best*
+    step 600/2000  loss=1.9309  val_var=1.8308  lr=8.0e-04 *best*
+    step 800/2000  loss=1.7248  val_var=1.8660  lr=6.6e-04
+    step 1000/2000  loss=2.3933  val_var=1.6738  lr=5.0e-04 *best*
+    step 1200/2000  loss=1.4911  val_var=1.6541  lr=3.5e-04 *best*
+    step 1400/2000  loss=1.3275  val_var=1.6306  lr=2.1e-04 *best*
+    step 1600/2000  loss=1.6452  val_var=1.7241  lr=1.0e-04
+    step 1800/2000  loss=1.4526  val_var=1.4802  lr=3.4e-05 *best*
+    step 2000/2000  loss=1.5904  val_var=1.7321  lr=1.0e-05
+    Best val_var=1.4802 at step 1800
+  [energy] Training done in 237.7s
+  [energy] Evaluating ...
+  [energy] Eval done in 0.9s
+    Naive: mean=-22.37168  bias=0.07872  var=7.78e-04  MSE=6.97e-03
+    CV:    mean=-22.42847  bias=0.02192  var=2.30e-04  MSE=7.11e-04
+    MSE reduction: 9.81x  Bias reduction: 3.59x
+
+  [dist] Training ...
+    step 200/2000  loss=0.2608  val_var=0.2361  lr=9.8e-04 *best*
+    step 400/2000  loss=0.2548  val_var=0.2450  lr=9.1e-04
+    step 600/2000  loss=0.2353  val_var=0.2391  lr=8.0e-04
+    step 800/2000  loss=0.2427  val_var=0.2327  lr=6.6e-04 *best*
+    step 1000/2000  loss=0.2553  val_var=0.2368  lr=5.0e-04
+    step 1200/2000  loss=0.2346  val_var=0.2381  lr=3.5e-04
+    step 1400/2000  loss=0.2417  val_var=0.2345  lr=2.1e-04
+    step 1600/2000  loss=0.2254  val_var=0.2423  lr=1.0e-04
+    step 1800/2000  loss=0.2358  val_var=0.2270  lr=3.4e-05 *best*
+    step 2000/2000  loss=0.2151  val_var=0.2403  lr=1.0e-05
+    Best val_var=0.2270 at step 1800
+  [dist] Training done in 237.3s
+  [dist] Evaluating ...
+  [dist] Eval done in 0.9s
+    Naive: mean=3.90998  bias=0.06003  var=5.10e-05  MSE=3.65e-03
+    CV:    mean=3.91155  bias=0.05846  var=4.65e-05  MSE=3.46e-03
+    MSE reduction: 1.05x  Bias reduction: 1.03x
+
+======================================================================
+  FINAL SUMMARY (mean ± std over 3 seeds)
+======================================================================
+
+  ── energy (GT=-22.4504) ──
+    naive_mean        : -22.37669 ± 0.01727
+    naive_bias        : 0.07370 ± 0.01727
+    naive_var         : 8.08e-04 ± 3.14e-05
+    naive_mse         : 6.54e-03 ± 2.40e-03
+    cv_mean           : -22.39473 ± 0.03300
+    cv_bias           : 0.05567 ± 0.03300
+    cv_var            : 2.91e-04 ± 6.47e-05
+    cv_mse            : 4.48e-03 ± 4.28e-03
+    mse_reduction     : 4.06825 ± 4.07012
+    bias_reduction    : 1.87901 ± 1.21349
+
+  ── dist (GT=3.9700) ──
+    naive_mean        : 3.91156 ± 0.00382
+    naive_bias        : 0.05845 ± 0.00382
+    naive_var         : 5.13e-05 ± 4.29e-07
+    naive_mse         : 3.48e-03 ± 4.39e-04
+    cv_mean           : 3.91163 ± 0.00421
+    cv_bias           : 0.05838 ± 0.00421
+    cv_var            : 4.80e-05 ± 9.97e-07
+    cv_mse            : 3.47e-03 ± 4.91e-04
+    mse_reduction     : 1.00485 ± 0.03934
+    bias_reduction    : 1.00178 ± 0.01975
+
+Done.
